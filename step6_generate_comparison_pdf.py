@@ -30,7 +30,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 from ai_analysis import get_comparison_advice
-from config import md_to_rl
+from config import md_to_rl, md_to_story
 
 # ── 字体注册 ──────────────────────────────────────────────────────────────────
 
@@ -639,11 +639,7 @@ def _build_stock_comparison(story, st, all_results, summaries, names, count, com
     story.append(Spacer(1, 0.2 * cm))
 
     ai_advice = get_comparison_advice(compare_type, summaries)
-    # 按段落渲染
-    for para in ai_advice.split("\n"):
-        para = para.strip()
-        if para:
-            story.append(Paragraph(md_to_rl(para), st["body"]))
+    story.extend(md_to_story(ai_advice, st["body"], table_builder=_tbl))
     story.append(Spacer(1, 0.5 * cm))
 
     # ── 第3章：股价走势叠加 ──
@@ -865,10 +861,7 @@ def _build_etf_comparison(story, st, all_results, summaries, names, count):
     ))
 
     ai_advice = get_comparison_advice("etf", summaries)
-    for para in ai_advice.split("\n"):
-        para = para.strip()
-        if para:
-            story.append(Paragraph(md_to_rl(para), st["body"]))
+    story.extend(md_to_story(ai_advice, st["body"], table_builder=_tbl))
     story.append(Spacer(1, 0.5 * cm))
 
     # ── 第3章：走势叠加图 ──

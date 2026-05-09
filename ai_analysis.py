@@ -417,3 +417,43 @@ def get_comparison_advice(compare_type: str, summaries: list) -> str:
         names = [s.get("name", "?") for s in summaries]
         return f"AI服务暂不可用。以下{count}只标的（{'、'.join(names)}）的详细数据请参考后续各章节图表。"
     return ai_text
+
+
+# ============================================================
+# 行业与公司动态新闻（替代央视通用新闻）
+# ============================================================
+
+_INDUSTRY_NEWS_PROMPT = """你是一位专业的证券分析师。请为以下公司提供与其业务密切相关的近期行业与公司动态摘要。
+
+公司：{name}（{ts_code}）
+所属行业：{industry}
+市场：{market}
+
+请提供以下内容（每条1-2句话，共5-8条）：
+
+1. 该公司近期重要公告或经营动态（如有）
+2. 所在行业的最新政策动向（补贴、监管、标准等）
+3. 行业供需变化或市场趋势
+4. 主要竞争对手的近期动态
+5. 可能影响该公司股价的宏观经济因素
+
+要求：
+- 只提供与「{industry}」行业和「{name}」公司直接相关的信息
+- 不要提供与该公司无关的泛泛宏观新闻
+- 如果某方面信息有限，如实说明即可
+- 每条以「•」开头，简洁明了"""
+
+
+def get_industry_news(name: str, ts_code: str, industry: str, market: str = "A股") -> str:
+    """
+    生成与该公司/行业相关的动态新闻摘要。
+    替代原来的央视新闻联播通用新闻。
+    """
+    prompt = _INDUSTRY_NEWS_PROMPT.format(
+        name=name, ts_code=ts_code, industry=industry, market=market
+    )
+    print("  调用 AI 生成行业动态...")
+    result = _call_llm(prompt)
+    if result == _FALLBACK:
+        return f"AI服务暂不可用，无法获取{name}（{industry}行业）的相关动态。"
+    return result

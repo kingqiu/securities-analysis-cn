@@ -185,3 +185,99 @@ def md_to_rl(text: str) -> str:
 
     return text
 
+
+def md_to_story(text: str, body_style, table_builder=None):
+    """
+    将 AI 返回的 Markdown 文本（可能包含表格）转换为 ReportLab story 元素列表。
+    - 普通文本 → Paragraph（使用 md_to_rl 转换标记）
+    - Markdown 表格（| col1 | col2 | 格式） → ReportLab Table
+    - 分隔线 --- → 跳过
+
+    参数:
+        text: AI 返回的原始文本
+        body_style: ReportLab ParagraphStyle，用于普通段落
+        table_builder: 可选，接收 data 二维列表和 col_widths 返回 Table 对象的函数
+    返回:
+        list: ReportLab story 元素列表
+    """
+    if not text:
+        return []
+
+    from reportlab.platypus import Paragraph as _Para, Spacer as _Spacer, Table as _Table, TableStyle as _TS
+    from reportlab.lib import colors as _colors
+    from reportlab.lib.units import cm as _cm
+
+    elements = []
+    lines = text.split("\n")
+    i = 0
+
+    while i < len(lines):
+        line = lines[i].strip()
+
+        # 跳过空行
+        if not line:
+            i += 1
+            continue
+
+        # 跳过纯分隔线（--- 或 ===）
+        if _re.match(r'^[-=]{3,}$', line):
+            i += 1
+            continue
+
+        # 检测 Markdown 表格：| xxx | yyy | 格式
+        if line.startswith("|") and line.endswith("|") and "|" in line[1:-1]:
+            table_lines = []
+            while i < len(lines):
+                ln = lines[i].strip()
+                if ln.startswith("|") and ln.endswith("|"):
+                    table_lines.append(ln)
+                    i += 1
+                elif not ln:
+                    i += 1
+                    break
+                else:
+                    break
+
+            # 解析表格行
+            rows = []
+            for tl in table_lines:
+                stripped = tl.strip("|")
+                cells = [c.strip() for c in stripped.split("|")]
+                # 跳过分隔行 |---|---|
+                if all(_re.match(r'^[-:\s]+$', c) for c in cells if c):
+                    continue
+                rows.append(cells)
+
+            if rows:
+                if table_builder:
+                    n_cols = len(rows[0])
+                    col_w = [18 * _cm / n_cols] * n_cols
+                    elements.append(table_builder(rows, col_widths=col_w))
+                else:
+                    n_cols = max(len(r) for r in rows)
+                    for r in rows:
+                        while len(r) < n_cols:
+                            r.append("")
+                    col_w = [18 * _cm / n_cols] * n_cols
+                    style = _TS("md_tbl", [
+                        ("BACKGROUND",    (0, 0), (-1, 0), _colors.HexColor("#c0392b")),
+                        ("TEXTCOLOR",     (0, 0), (-1, 0), _colors.white),
+                        ("FONTSIZE",      (0, 0), (-1, -1), 8),
+                        ("ROWBACKGROUNDS",(0, 1), (-1, -1), [_colors.white, _colors.HexColor("#fff5f5")]),
+                        ("GRID",          (0, 0), (-1, -1), 0.4, _colors.HexColor("#cccccc")),
+                        ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
+                        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+                        ("TOPPADDING",    (0, 0), (-1, -1), 3),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                    ])
+                    t = _Table(rows, colWidths=col_w, repeatRows=1)
+                    t.setStyle(style)
+                    elements.append(t)
+                elements.append(_Spacer(1, 0.2 * _cm))
+        else:
+            # 普通文本行
+            elements.append(_Para(md_to_rl(line), body_style))
+            i += 1
+
+    return elements
+

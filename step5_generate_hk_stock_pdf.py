@@ -27,8 +27,8 @@ from reportlab.platypus import (
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-from ai_analysis import get_investment_advice
-from config import md_to_rl
+from ai_analysis import get_investment_advice, get_industry_news
+from config import md_to_rl, md_to_story
 
 # ── 字体注册 ──────────────────────────────────────────────────────────────────
 
@@ -545,9 +545,7 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
         st["caption"]
     ))
     story.append(Spacer(1, 0.2*cm))
-    for line in advice_text.split("\n"):
-        if line.strip():
-            story.append(Paragraph(md_to_rl(line.strip()), st["body"]))
+    story.extend(md_to_story(advice_text, st["body"], table_builder=_tbl))
     story.append(Spacer(1, 0.3*cm))
 
     # ── 三、股价与均线 ──
@@ -701,19 +699,23 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
             content = sections.get(key, "")
             if content:
                 story.append(Paragraph(title, st["h2"]))
-                for line in content.split("\n"):
-                    if line.strip():
-                        story.append(Paragraph(md_to_rl(line.strip()[:80]), st["body"]))
+                story.extend(md_to_story(content, st["body"], table_builder=_tbl))
                 story.append(Spacer(1, 0.2*cm))
 
-    # ── 十、宏观环境 ──
-    if macro_news_df is not None and not macro_news_df.empty:
-        story.append(Paragraph("十、宏观环境参考（央视新闻联播）", st["h1"]))
-        story.append(Paragraph("以下为最新新闻联播要闻，供判断宏观政策环境：", st["caption"]))
-        for _, row in macro_news_df.head(5).iterrows():
-            title_text = str(row.get("title", ""))[:40]
-            story.append(Paragraph(f"• {title_text}", st["body"]))
-        story.append(Spacer(1, 0.3*cm))
+    # ── 十、行业与公司动态 ──
+    story.append(Paragraph("十、行业与公司动态", st["h1"]))
+    story.append(Paragraph(
+        f"以下为 AI 基于公开信息整理的{stock_name}所在行业近期动态，仅供参考。",
+        st["caption"]
+    ))
+    story.append(Spacer(1, 0.2*cm))
+    try:
+        _industry = basic.get("industry", basic.get("name", "未知"))
+        industry_news = get_industry_news(stock_name, d["ts_code"], _industry, "港股")
+        story.extend(md_to_story(industry_news, st["body"], table_builder=_tbl))
+    except Exception as e:
+        story.append(Paragraph(f"行业动态获取失败：{e}", st["body"]))
+    story.append(Spacer(1, 0.3*cm))
 
     # ── 风险提示 ──
     story.append(PageBreak())

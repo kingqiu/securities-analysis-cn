@@ -28,7 +28,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 from ai_analysis import get_investment_advice
-from config import md_to_rl
+from config import md_to_rl, md_to_story
 
 # ── 字体注册 ──────────────────────────────────────────────────────────────────
 
@@ -484,9 +484,7 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     story.append(Paragraph("二、投资建议（AI分析）", st["h1"]))
     story.append(Paragraph("以下建议由 MiniMax-M2.7 模型基于量化数据自动生成，仅供参考，不构成投资依据。", st["caption"]))
     story.append(Spacer(1, 0.2*cm))
-    for line in advice_text.split("\n"):
-        if line.strip():
-            story.append(Paragraph(md_to_rl(line.strip()), st["body"]))
+    story.extend(md_to_story(advice_text, st["body"], table_builder=_tbl))
     story.append(Spacer(1, 0.3*cm))
 
     # ── 三、业绩分析 ──
