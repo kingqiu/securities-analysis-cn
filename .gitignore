@@ -1,0 +1,20 @@
+# 敏感配置（绝对不上传）
+.env
+
+# 测试脚本（含硬编码token，仅本地使用）
+test_apis.py
+
+# Python缓存
+*.pyc
+__pycache__/
+
+# 临时数据文件
+temp_*.json
+etf_real_data.json
+
+# 生成的报告
+*.docx
+*.pdf
+
+# macOS
+.DS_Store
