@@ -19,14 +19,34 @@ pip install requests pandas matplotlib reportlab numpy python-dotenv --break-sys
 
 ## 配置
 
-复制 `.env.example` 为 `.env`，填入 Minima API Key：
+复制 `.env.example` 为 `.env`，填入 API Key：
 
 ```bash
 cp .env.example .env
-# 编辑 .env，填入 MINIMA_API_KEY
+# 编辑 .env，填入 TUSHARE_API_TOKEN 和 MINIMA_API_KEY
 ```
 
-> 若无 API Key，报告仍可生成，AI 建议会降级为规则化量化建议。
+> 若无 AI API Key，报告仍可生成，AI 建议会降级为规则化量化建议。
+
+### 切换 AI 大模型
+
+默认使用 MiniMax，可在 `.env` 中切换为 OpenAI 兼容服务（支持 GPT、DeepSeek、通义千问等）：
+
+```env
+LLM_PROVIDER=openai
+OPENAI_API_KEY=your_key
+OPENAI_API_URL=https://api.openai.com      # 或 https://api.deepseek.com
+OPENAI_MODEL=gpt-4o                        # 或 deepseek-chat
+```
+
+### 切换搜索引擎
+
+默认使用 AI 知识库总结，可切换为 Tavily 搜索或禁用：
+
+```env
+SEARCH_PROVIDER=tavily     # 或 none 禁用
+TAVILY_API_KEY=your_key
+```
 
 ## 使用
 
@@ -57,32 +77,51 @@ python3 run_analysis.py 510300         # ETF，按代码
 ### 数据维度（A股21项API调用）
 基本信息、日线行情、估值指标、利润表、资产负债表、现金流量表、财务指标、前十大股东、行业基准指数、行业可比估值、主营业务构成、分红历史、业绩预告、股东人数、资金流向、融资融券、大宗交易、概念板块、股权质押、审计意见、央视新闻
 
+## 插件化架构（Provider Pattern）
+
+三大核心组件均可独立替换，通过 `.env` 配置切换，无需修改代码：
+
+| 组件 | 环境变量 | 可选值 | 说明 |
+|------|---------|--------|------|
+| 数据源 | `DATA_PROVIDER` | `tushare`（默认） | 行情/财务/股东数据 |
+| AI模型 | `LLM_PROVIDER` | `minimax`（默认）、`openai` | 投资建议生成 |
+| 搜索引擎 | `SEARCH_PROVIDER` | `ai_summary`（默认）、`tavily`、`none` | 公司研究信息 |
+
+扩展新 provider 只需：继承 `providers/base.py` 中的基类 → 实现接口 → 在 `providers/__init__.py` 注册。
+
 ## 文件结构
 
 ```
 securities-analysis-cn/
 ├── SKILL.md                        # Skill 定义（agent 入口）
 ├── run_analysis.py                 # 统一入口脚本
+├── config.py                       # 配置管理（Provider 选择 + API 密钥）
+├── providers/                      # 插件化适配器
+│   ├── base.py                     # 三个抽象基类
+│   ├── __init__.py                 # 工厂函数
+│   ├── data_tushare.py             # 数据源：小德法 Tushare
+│   ├── llm_minimax.py              # LLM：MiniMax-M2.7
+│   ├── llm_openai.py               # LLM：OpenAI 兼容（GPT/DeepSeek/通义等）
+│   ├── search_ai.py                # 搜索：AI 知识库总结
+│   └── search_tavily.py            # 搜索：Tavily API
 ├── identify_code_type.py           # 代码/名称解析与类型识别
-├── config.py                       # 配置管理
-├── ai_analysis.py                  # AI买卖建议（MiniMax-M2.7）
-├── web_research.py                 # 互联网研究模块（AI近期事件/研报）
+├── ai_analysis.py                  # AI投资建议（通过 LLMProvider）
+├── web_research.py                 # 互联网研究（通过 SearchProvider）
 ├── step1_fetch_real_data.py        # ETF 数据获取
 ├── step1_fetch_stock_data.py       # A股 数据获取（21项API）
 ├── step1_fetch_hk_stock_data.py    # 港股 数据获取（9项API）
 ├── step3_generate_pdf_report.py    # ETF PDF报告生成
 ├── step4_generate_stock_pdf.py     # A股 PDF报告生成（16章节）
 ├── step5_generate_hk_stock_pdf.py  # 港股 PDF报告生成（10章节）
-├── .env.example                    # 环境变量模板
-├── .env                            # 实际密钥（不上传）
+├── .env.example                    # 环境变量模板（含所有配置说明）
 └── .gitignore
 ```
 
 ## 数据源
 
-- **财务数据**：小德法 Tushare API（A股21项/港股9项/ETF全覆盖）
-- **AI建议**：MiniMax-M2.7 模型（Anthropic 兼容 API）
-- **互联网研究**：通过 AI 模型获取公司近期事件、行业动态、机构观点
+- **财务数据**：小德法 Tushare API（A股21项/港股9项/ETF全覆盖），可替换
+- **AI建议**：MiniMax-M2.7（默认），可切换为 OpenAI/DeepSeek/通义千问
+- **互联网研究**：AI 知识库总结（默认），可切换为 Tavily 搜索引擎
 - **宏观新闻**：央视新闻联播 API
 
 ## 兼容性

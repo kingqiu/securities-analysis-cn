@@ -26,7 +26,27 @@ cp .env.example .env
 # Edit .env, add your TUSHARE_API_TOKEN and MINIMA_API_KEY
 ```
 
-> If no Minima API Key is provided, reports will still generate with rule-based quantitative advice instead of AI-powered analysis.
+> If no AI API Key is provided, reports will still generate with rule-based quantitative advice.
+
+### Switch AI Model
+
+Default: MiniMax. Switch to any OpenAI-compatible service (GPT, DeepSeek, Qwen, etc.):
+
+```env
+LLM_PROVIDER=openai
+OPENAI_API_KEY=your_key
+OPENAI_API_URL=https://api.openai.com      # or https://api.deepseek.com
+OPENAI_MODEL=gpt-4o                        # or deepseek-chat
+```
+
+### Switch Search Engine
+
+Default: AI knowledge summary. Switch to Tavily search or disable:
+
+```env
+SEARCH_PROVIDER=tavily     # or none to disable
+TAVILY_API_KEY=your_key
+```
 
 ## Usage
 
@@ -57,31 +77,51 @@ Output: PDF file in current directory, named `{name}_{type}_report_{date}.pdf`
 ### Data Dimensions (A-share: 21 API Calls)
 Basic info, daily quotes, valuation metrics, income statement, balance sheet, cash flow statement, financial indicators, top 10 shareholders, industry benchmark index, industry peer valuation, revenue composition, dividend history, earnings forecast, shareholder count, capital flow, margin trading, block trades, concept themes, share pledges, audit opinions, CCTV news
 
+## Plugin Architecture (Provider Pattern)
+
+Three core components are independently swappable via `.env` configuration:
+
+| Component | Env Variable | Options | Purpose |
+|-----------|-------------|---------|--------|
+| Data Source | `DATA_PROVIDER` | `tushare` (default) | Market/financial/shareholder data |
+| AI Model | `LLM_PROVIDER` | `minimax` (default), `openai` | Investment advice generation |
+| Search | `SEARCH_PROVIDER` | `ai_summary` (default), `tavily`, `none` | Company research |
+
+To add a new provider: inherit from base class in `providers/base.py` → implement interface → register in `providers/__init__.py`.
+
 ## Project Structure
 
 ```
 securities-analysis-cn/
 ├── SKILL.md                        # Skill definition (agent entry)
 ├── run_analysis.py                 # Unified entry script
+├── config.py                       # Configuration (Provider selection + API keys)
+├── providers/                      # Plugin adapters
+│   ├── base.py                     # Three abstract base classes
+│   ├── __init__.py                 # Factory functions
+│   ├── data_tushare.py             # Data: Tushare API
+│   ├── llm_minimax.py              # LLM: MiniMax-M2.7
+│   ├── llm_openai.py               # LLM: OpenAI compatible (GPT/DeepSeek/Qwen)
+│   ├── search_ai.py                # Search: AI knowledge summary
+│   └── search_tavily.py            # Search: Tavily API
 ├── identify_code_type.py           # Code/name parsing & type identification
-├── config.py                       # Configuration management
-├── ai_analysis.py                  # AI investment advice (MiniMax-M2.7)
-├── web_research.py                 # Internet research module (AI events/reports)
+├── ai_analysis.py                  # AI investment advice (via LLMProvider)
+├── web_research.py                 # Internet research (via SearchProvider)
 ├── step1_fetch_real_data.py        # ETF data fetching
 ├── step1_fetch_stock_data.py       # A-share data fetching (21 APIs)
 ├── step1_fetch_hk_stock_data.py    # HK stock data fetching (9 APIs)
 ├── step3_generate_pdf_report.py    # ETF PDF report generation
 ├── step4_generate_stock_pdf.py     # A-share PDF report generation (16 sections)
 ├── step5_generate_hk_stock_pdf.py  # HK stock PDF report generation (10 sections)
-├── .env.example                    # Environment variable template
+├── .env.example                    # Environment variable template (all options documented)
 └── .gitignore
 ```
 
 ## Data Sources
 
-- **Financial Data**: Xiaodefa Tushare API (A-share 21 APIs / HK 9 APIs / ETF full coverage)
-- **AI Advice**: MiniMax-M2.7 model (Anthropic-compatible API)
-- **Internet Research**: AI-powered company event, industry dynamics, and analyst opinion collection
+- **Financial Data**: Tushare API (A-share 21 APIs / HK 9 APIs / ETF), swappable
+- **AI Advice**: MiniMax-M2.7 (default), switchable to OpenAI/DeepSeek/Qwen
+- **Internet Research**: AI knowledge summary (default), switchable to Tavily
 - **Macro News**: CCTV News API (央视新闻联播)
 
 ## Compatibility

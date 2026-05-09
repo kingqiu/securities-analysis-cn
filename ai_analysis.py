@@ -6,6 +6,7 @@ Minima AI 买卖建议模块
 
 import requests
 from config import MINIMA_API_URL, MINIMA_MODEL, MINIMA_API_KEY
+from providers import get_llm_provider
 
 _ETF_PROMPT = """你是一位专业的基金分析师。请基于以下量化数据，对{name}（{ts_code}）给出简洁的投资建议。
 
@@ -213,36 +214,16 @@ def _fallback_advice(security_type: str, summary_data: dict) -> str:
     return _FALLBACK
 
 
-def _call_minima(prompt: str) -> str:
-    if not MINIMA_API_KEY:
-        return _FALLBACK
-
-    headers = {
-        "x-api-key": MINIMA_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
-    payload = {
-        "model": MINIMA_MODEL,
-        "max_tokens": 1024,
-        "messages": [{"role": "user", "content": prompt}],
-    }
+def _call_llm(prompt: str) -> str:
+    """通过 Provider 调用 AI 大模型"""
     try:
-        resp = requests.post(
-            f"{MINIMA_API_URL}/v1/messages",
-            json=payload,
-            headers=headers,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        # 过滤出 text 类型（响应中可能包含 thinking 块）
-        for block in data.get("content", []):
-            if block.get("type") == "text":
-                return block["text"].strip()
-        return _FALLBACK
+        llm = get_llm_provider()
+        if not llm.is_available():
+            return _FALLBACK
+        result = llm.chat(prompt, max_tokens=1024)
+        return result if result else _FALLBACK
     except Exception as e:
-        print(f"  ✗ Minima AI 调用失败: {e}")
+        print(f"  ✗ AI 调用失败: {e}")
         return _FALLBACK
 
 
@@ -329,7 +310,7 @@ def get_investment_advice(security_type: str, summary_data: dict) -> str:
     else:
         return _fallback_advice(security_type, summary_data)
 
-    ai_text = _call_minima(prompt)
+    ai_text = _call_llm(prompt)
     if ai_text == _FALLBACK:
         return _fallback_advice(security_type, summary_data)
     return ai_text

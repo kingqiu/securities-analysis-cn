@@ -20,8 +20,8 @@ from datetime import datetime
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_DIR)
 
-from identify_code_type import resolve_input, identify
 from config import ETF_INDEX_MAP
+from providers import get_data_provider, get_search_provider
 
 
 def _print_banner():
@@ -51,11 +51,16 @@ def run(user_input: str):
     """主流程：解析 → 识别 → 获取数据 → 生成报告"""
     _print_banner()
 
+    # 初始化 providers
+    data_provider = get_data_provider()
+    search_provider = get_search_provider()
+
     # ── 步骤1：解析用户输入，获取 ts_code ──
     print("=" * 60)
     print(f"步骤 1/4：解析输入「{user_input}」")
     print("=" * 60)
     try:
+        from identify_code_type import resolve_input
         ts_code = resolve_input(user_input)
     except ValueError as e:
         print(f"\n✗ 错误：{e}")
@@ -68,7 +73,7 @@ def run(user_input: str):
     print(f"步骤 2/4：识别证券类型")
     print("=" * 60)
     try:
-        code_type, meta = identify(ts_code)
+        code_type, meta = data_provider.identify_security(ts_code)
     except ValueError as e:
         print(f"\n✗ 错误：{e}")
         sys.exit(1)
@@ -88,18 +93,14 @@ def run(user_input: str):
     data_file = os.path.join(PROJECT_DIR, f"temp_{ts_code.replace('.', '_')}_data.json")
 
     if code_type == "etf":
-        from step1_fetch_real_data import fetch_all_data
-        # 获取ETF对应的跟踪指数代码
         code_prefix = ts_code.split(".")[0]
         index_code = ETF_INDEX_MAP.get(code_prefix, "000300.SH")
         print(f"  → 跟踪指数：{index_code}")
-        result = fetch_all_data(ts_code, index_code)
+        result = data_provider.fetch_etf_data(ts_code, index_code)
     elif code_type == "stock":
-        from step1_fetch_stock_data import fetch_stock_data
-        result = fetch_stock_data(ts_code)
+        result = data_provider.fetch_stock_data(ts_code)
     elif code_type == "hk_stock":
-        from step1_fetch_hk_stock_data import fetch_hk_stock_data
-        result = fetch_hk_stock_data(ts_code)
+        result = data_provider.fetch_hk_stock_data(ts_code)
     else:
         print(f"✗ 不支持的类型：{code_type}")
         sys.exit(1)
@@ -108,13 +109,12 @@ def run(user_input: str):
         print("\n✗ 数据获取失败，请检查网络连接或代码是否正确")
         sys.exit(1)
 
-    # 步骤3.5：互联网研究（获取近期新闻/研报/事件）
-    if code_type in ("stock", "hk_stock"):
-        print("\n  → 正在进行互联网研究（近期新闻/研报/事件）...")
+    # 步骤3.5：互联网研究（通过 SearchProvider）
+    if code_type in ("stock", "hk_stock") and search_provider.is_available():
+        print(f"\n  → 正在进行互联网研究（{search_provider.name}）...")
         try:
-            from web_research import search_company_news
             market_label = "A股" if code_type == "stock" else "港股"
-            research = search_company_news(stock_name, ts_code, market_label)
+            research = search_provider.search_company(stock_name, ts_code, market_label)
             if research.get("status") == "success":
                 result["web_research"] = research
                 print(f"  ✓ 互联网研究完成")

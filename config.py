@@ -1,16 +1,61 @@
-# ETF 数据源配置文件
+# 证券分析 - 全局配置文件
 
-# 小德法 Tushare API 配置（Token 从环境变量读取）
-TUSHARE_API_URL = "http://tsy.xiaodefa.cn"
-TUSHARE_API_TOKEN = ""  # 将在下方从 .env 加载
+import os as _os
 
+# ============================================================
+# 环境变量加载（优先从 .env 文件读取）
+# ============================================================
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _dotenv_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".env")
+    _load_dotenv(dotenv_path=_dotenv_path)
+except ImportError:
+    pass  # dotenv 未安装时直接读系统环境变量
+
+# ============================================================
+# Provider 选择（用户在此切换，或通过 .env 设置）
+# ============================================================
+
+# 数据源：tushare（默认）
+DATA_PROVIDER = _os.environ.get("DATA_PROVIDER", "tushare")
+
+# AI大模型：minimax（默认）| openai
+LLM_PROVIDER = _os.environ.get("LLM_PROVIDER", "minimax")
+
+# 搜索/研究：ai_summary（默认）| tavily | none
+SEARCH_PROVIDER = _os.environ.get("SEARCH_PROVIDER", "ai_summary")
+
+# ============================================================
+# 数据源配置：Tushare
+# ============================================================
+TUSHARE_API_URL = _os.environ.get("TUSHARE_API_URL", "http://tsy.xiaodefa.cn")
+TUSHARE_API_TOKEN = _os.environ.get("TUSHARE_API_TOKEN", "")
+
+# ============================================================
+# AI 大模型配置
+# ============================================================
+
+# MiniMax（默认）
+MINIMA_API_URL = _os.environ.get("MINIMA_API_URL", "https://api.minimaxi.com/anthropic")
+MINIMA_MODEL = _os.environ.get("MINIMA_MODEL", "MiniMax-M2.7")
+MINIMA_API_KEY = _os.environ.get("MINIMA_API_KEY", "")
+
+# OpenAI 兼容（可选，也支持 DeepSeek / 通义千问 / 文心一言等）
+OPENAI_API_URL = _os.environ.get("OPENAI_API_URL", "https://api.openai.com")
+OPENAI_API_KEY = _os.environ.get("OPENAI_API_KEY", "")
+OPENAI_MODEL = _os.environ.get("OPENAI_MODEL", "gpt-4o")
+
+# ============================================================
+# 搜索/研究配置
+# ============================================================
+TAVILY_API_KEY = _os.environ.get("TAVILY_API_KEY", "")
+
+# ============================================================
 # 数据模式
-# True = 使用 Mock 数据（网络不可用时）
-# False = 使用真实 API 数据（网络可用时）
+# ============================================================
 USE_MOCK_DATA = False
 
 # 报告配置
-import os as _os
 DEFAULT_OUTPUT_DIR = _os.path.dirname(_os.path.abspath(__file__))
 
 # ETF 代码 → 跟踪指数映射
@@ -53,18 +98,3 @@ TOP_HOLDERS_COUNT = 10      # 前十大股东
 PE_HIGH = 50.0              # PE高于此值为高估
 PE_LOW = 15.0               # PE低于此值为低估
 
-# Minima AI API 配置（key从 .env 环境变量读取，不硬编码）
-import os as _os_env
-try:
-    from dotenv import load_dotenv as _load_dotenv
-    _dotenv_path = _os_env.path.join(_os_env.path.dirname(_os_env.path.abspath(__file__)), ".env")
-    _load_dotenv(dotenv_path=_dotenv_path)
-except ImportError:
-    pass  # dotenv未安装时直接读系统环境变量
-
-MINIMA_API_URL = "https://api.minimaxi.com/anthropic"
-MINIMA_MODEL = "MiniMax-M2.7"
-MINIMA_API_KEY = _os_env.environ.get("MINIMA_API_KEY", "")
-
-# Tushare Token 也从环境变量加载
-TUSHARE_API_TOKEN = _os_env.environ.get("TUSHARE_API_TOKEN", "")
