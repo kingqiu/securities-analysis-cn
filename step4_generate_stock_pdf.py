@@ -538,14 +538,18 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     if audit_df is not None and not audit_df.empty:
         audit_opinion = audit_df.iloc[0].get("audit_result", "N/A")
 
-    # 业绩预告
-    forecast_info = "N/A"
+    # 业绩预告（只取近1年内的）
+    forecast_info = "暂无近期业绩预告"
     if forecast_df is not None and not forecast_df.empty:
-        fc = forecast_df.sort_values("ann_date", ascending=False).iloc[0]
-        fc_type = fc.get("type", "")
-        fc_min = fc.get("p_change_min", "")
-        fc_max = fc.get("p_change_max", "")
-        forecast_info = f"{fc_type}（变动幅度{fc_min}%~{fc_max}%）"
+        from datetime import datetime, timedelta
+        _one_year_ago = (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
+        _fc_recent = forecast_df[forecast_df["ann_date"].astype(str) >= _one_year_ago]
+        if not _fc_recent.empty:
+            fc = _fc_recent.sort_values("ann_date", ascending=False).iloc[0]
+            fc_type = fc.get("type", "")
+            fc_min = fc.get("p_change_min", "")
+            fc_max = fc.get("p_change_max", "")
+            forecast_info = f"{fc_type}（变动幅度{fc_min}%~{fc_max}%）"
 
     # AI 买卖建议（增强版）
     advice_text = get_investment_advice("stock", {
@@ -870,20 +874,28 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
         story.append(Spacer(1, 0.3*cm))
 
     # ── 十一、业绩预告 ──
+    story.append(Paragraph("十一、业绩预告", st["h1"]))
     if forecast_df is not None and not forecast_df.empty:
-        story.append(Paragraph("十一、业绩预告", st["h1"]))
+        from datetime import datetime, timedelta
+        one_year_ago = (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
         fc = forecast_df.sort_values("ann_date", ascending=False).copy()
-        fc_rows = [["公告日", "报告期", "预告类型", "变动下限%", "变动上限%"]]
-        for _, row in fc.head(5).iterrows():
-            fc_rows.append([
-                str(row.get("ann_date", ""))[:8],
-                str(row.get("end_date", ""))[:6],
-                str(row.get("type", "")),
-                str(row.get("p_change_min", "N/A")),
-                str(row.get("p_change_max", "N/A")),
-            ])
-        story.append(_tbl(fc_rows, col_widths=[3*cm, 2.5*cm, 3*cm, 3*cm, 3*cm]))
-        story.append(Spacer(1, 0.3*cm))
+        fc = fc[fc["ann_date"].astype(str) >= one_year_ago]
+        if not fc.empty:
+            fc_rows = [["公告日", "报告期", "预告类型", "变动下限%", "变动上限%"]]
+            for _, row in fc.head(5).iterrows():
+                fc_rows.append([
+                    str(row.get("ann_date", ""))[:8],
+                    str(row.get("end_date", ""))[:6],
+                    str(row.get("type", "")),
+                    str(row.get("p_change_min", "N/A")),
+                    str(row.get("p_change_max", "N/A")),
+                ])
+            story.append(_tbl(fc_rows, col_widths=[3*cm, 2.5*cm, 3*cm, 3*cm, 3*cm]))
+        else:
+            story.append(Paragraph("暂无近1年内的业绩预告数据。", st["body"]))
+    else:
+        story.append(Paragraph("暂无业绩预告数据。", st["body"]))
+    story.append(Spacer(1, 0.3*cm))
 
     # ── 十二、概念板块与题材 ──
     if concepts_df is not None and not concepts_df.empty:
