@@ -28,6 +28,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 from ai_analysis import get_investment_advice
+from config import md_to_rl
 
 # ── 字体注册 ──────────────────────────────────────────────────────────────────
 
@@ -485,7 +486,7 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     story.append(Spacer(1, 0.2*cm))
     for line in advice_text.split("\n"):
         if line.strip():
-            story.append(Paragraph(line.strip(), st["body"]))
+            story.append(Paragraph(md_to_rl(line.strip()), st["body"]))
     story.append(Spacer(1, 0.3*cm))
 
     # ── 三、业绩分析 ──

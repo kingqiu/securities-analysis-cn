@@ -1,6 +1,7 @@
 # 证券分析 - 全局配置文件
 
 import os as _os
+import re as _re
 import time as _time
 import threading as _threading
 
@@ -148,4 +149,39 @@ class _RateLimiter:
 
 # 全局单例限流器，所有 call_api 共享
 api_rate_limiter = _RateLimiter(API_RATE_LIMIT, _API_WINDOW)
+
+
+# ============================================================
+# Markdown → ReportLab 转换工具
+# ============================================================
+
+def md_to_rl(text: str) -> str:
+    """
+    将 AI 返回的 Markdown 文本转换为 ReportLab Paragraph 支持的 HTML 标签。
+    处理：**粗体** → <b>粗体</b>，*斜体* → <i>斜体</i>，
+         Markdown 列表标记 → 去掉或保留缩进，### 标题 → <b>标题</b>
+    """
+    if not text:
+        return text
+
+    # 处理标题：### 标题 → <b>标题</b>
+    text = _re.sub(r'^#{1,6}\s+(.+)$', r'<b>\1</b>', text, flags=_re.MULTILINE)
+
+    # 处理粗体：**text** 或 __text__
+    text = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+    text = _re.sub(r'__(.+?)__', r'<b>\1</b>', text)
+
+    # 处理斜体：*text* 或 _text_（注意不要误伤已处理的粗体）
+    text = _re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', text)
+
+    # 处理行内代码：`code` → code
+    text = _re.sub(r'`(.+?)`', r'\1', text)
+
+    # 处理无序列表标记：- item 或 * item → • item
+    text = _re.sub(r'^[\s]*[-*+]\s+', '• ', text, flags=_re.MULTILINE)
+
+    # 处理有序列表标记：1. item → 保留数字但去掉多余空格
+    text = _re.sub(r'^(\d+)\.\s+', r'\1. ', text, flags=_re.MULTILINE)
+
+    return text
 

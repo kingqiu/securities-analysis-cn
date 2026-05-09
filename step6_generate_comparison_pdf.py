@@ -30,6 +30,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 from ai_analysis import get_comparison_advice
+from config import md_to_rl
 
 # ── 字体注册 ──────────────────────────────────────────────────────────────────
 
@@ -642,7 +643,7 @@ def _build_stock_comparison(story, st, all_results, summaries, names, count, com
     for para in ai_advice.split("\n"):
         para = para.strip()
         if para:
-            story.append(Paragraph(para, st["body"]))
+            story.append(Paragraph(md_to_rl(para), st["body"]))
     story.append(Spacer(1, 0.5 * cm))
 
     # ── 第3章：股价走势叠加 ──
@@ -867,7 +868,7 @@ def _build_etf_comparison(story, st, all_results, summaries, names, count):
     for para in ai_advice.split("\n"):
         para = para.strip()
         if para:
-            story.append(Paragraph(para, st["body"]))
+            story.append(Paragraph(md_to_rl(para), st["body"]))
     story.append(Spacer(1, 0.5 * cm))
 
     # ── 第3章：走势叠加图 ──
