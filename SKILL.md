@@ -1,11 +1,11 @@
 ---
 name: securities-analysis-cn
 description: >
-  自动分析A股、港股、ETF基金，生成专业PDF深度分析报告（含AI买卖建议）。
+  自动分析A股、港股、ETF基金，生成专业PDF深度分析报告（含AI买卖建议和互联网研究）。
   支持输入证券代码（510300、600519、00700.HK）或名称（贵州茅台、腾讯控股、沪深300ETF），
   自动识别类型并生成对应报告。使用场景：当用户要求"分析某只股票/基金"、"生成财报分析"、
   "帮我看看XX的投资价值"、"分析A股/港股"、"ETF报告"时触发。
-  数据源：小德法Tushare API。AI建议：MiniMax-M2.7模型。
+  插件化架构：数据源、AI模型、搜索引擎均可通过 .env 配置切换。
 ---
 
 # 中国证券深度分析报告生成器
@@ -32,40 +32,64 @@ python3 run_analysis.py <用户输入>
 pip install requests pandas matplotlib reportlab numpy python-dotenv --break-system-packages
 ```
 
-确认 `.env` 文件存在于 skill 根目录，包含：
+确认 `.env` 文件存在于 skill 根目录，至少包含：
 ```
+TUSHARE_API_TOKEN=<token>
 MINIMA_API_KEY=<key>
 ```
 
-若 `.env` 不存在或 key 为空，AI 建议会降级为基于规则的量化建议（不影响报告生成）。
+- `TUSHARE_API_TOKEN` 必填，否则无法获取数据
+- `MINIMA_API_KEY` 可选，为空时 AI 建议降级为规则化量化建议
 
 ## 工作流程
 
-`run_analysis.py` 内部执行四步：
+`run_analysis.py` 通过 Provider 适配器执行五步：
 
-1. **解析输入** → `identify_code_type.resolve_input()` 将名称/代码转为标准 ts_code
-2. **识别类型** → `identify_code_type.identify()` 判断 etf / stock / hk_stock
-3. **获取数据** → 调用对应 fetcher（Tushare API，约60-120秒）
-4. **生成PDF** → 调用对应 generator（reportlab + matplotlib，约20秒）
+1. **初始化 Provider** → 根据 `.env` 配置创建 DataProvider / LLMProvider / SearchProvider
+2. **解析输入** → `resolve_input()` 将名称/代码转为标准 ts_code
+3. **识别类型** → `DataProvider.identify_security()` 判断 etf / stock / hk_stock
+4. **获取数据** → `DataProvider.fetch_*()` 调用对应 API（约60-120秒）
+5. **互联网研究** → `SearchProvider.search_company()` 获取近期事件/研报（A股/港股）
+6. **生成PDF** → 调用对应 generator（reportlab + matplotlib，约20秒）
 
 类型路由：
 
-| 类型 | 数据获取 | PDF生成 |
-|------|----------|---------|
-| ETF | `step1_fetch_real_data.fetch_all_data()` | `step3_generate_pdf_report.create_etf_pdf()` |
-| A股 | `step1_fetch_stock_data.fetch_stock_data()` | `step4_generate_stock_pdf.create_stock_pdf()` |
-| 港股 | `step1_fetch_hk_stock_data.fetch_hk_stock_data()` | `step5_generate_hk_stock_pdf.create_hk_stock_pdf()` |
+| 类型 | 数据获取 | 数据维度 | PDF生成 |
+|------|----------|----------|---------|
+| ETF | `DataProvider.fetch_etf_data()` | 基本+净值+持仓+规模 | `create_etf_pdf()` |
+| A股 | `DataProvider.fetch_stock_data()` | 21项API | `create_stock_pdf()` |
+| 港股 | `DataProvider.fetch_hk_stock_data()` | 9项API | `create_hk_stock_pdf()` |
 
 ## 报告内容
 
 ### ETF报告（9章）
 封面 → 投资摘要 → AI买卖建议 → 业绩分析（净值走势图+收益率+跟踪误差） → 持仓分析 → 同类对比 → 规模与流动性 → 费率分析 → 风险提示
 
-### A股报告（9章）
-封面 → 公司概况 → AI买卖建议 → 股价走势（vs上证综指） → 业绩分析（营收/利润图） → 财务健康度 → 现金流质量 → 行业可比估值+三情景分析 → 股东结构 → 风险提示
+### A股报告（16章）
+1. 公司概况 → 2. AI投资建议（5档评级+操作策略） → 3. 股价与估值（vs上证综指） → 4. 业绩分析（营收/利润图） → 5. 财务健康度（现金流+资产负债） → 6. 行业可比估值 → 7. 三情景分析 → 8. 主营业务构成（按产品/地区） → 9. 资金面综合分析（主力资金流向/融资融券/股东人数/大宗交易/股权质押） → 10. 分红送股历史 → 11. 业绩预告 → 12. 概念板块与投资题材 → 13. 股东结构 → 14. 公司研究与行业动态（AI互联网研究） → 15. 宏观环境参考 → 16. 审计与合规
 
-### 港股报告（8章）
-封面 → 公司概况 → AI买卖建议 → 股价走势（含MA20/MA60） → 业绩分析 → 财务健康度 → 现金流质量 → 南向资金持仓分析 → 风险提示
+### 港股报告（10章）
+1. 公司概况 → 2. AI投资建议 → 3. 股价走势（含MA20/MA60） → 4. 业绩分析 → 5. 财务健康度 → 6. 现金流质量 → 7. 南向资金持仓分析 → 8. 核心财务指标趋势与分红 → 9. 公司研究与行业动态 → 10. 宏观环境参考
+
+## 插件化架构（Provider Pattern）
+
+三大核心组件均可通过 `.env` 独立替换，无需修改代码：
+
+| 组件 | 环境变量 | 默认值 | 可选值 |
+|------|---------|--------|--------|
+| 数据源 | `DATA_PROVIDER` | `tushare` | 可扩展 |
+| AI模型 | `LLM_PROVIDER` | `minimax` | `openai`（兼容 GPT/DeepSeek/通义千问） |
+| 搜索引擎 | `SEARCH_PROVIDER` | `ai_summary` | `tavily`、`none` |
+
+切换示例（使用 DeepSeek 替代 MiniMax）：
+```
+LLM_PROVIDER=openai
+OPENAI_API_KEY=your_key
+OPENAI_API_URL=https://api.deepseek.com
+OPENAI_MODEL=deepseek-chat
+```
+
+扩展新 provider：继承 `providers/base.py` 中的基类 → 实现接口 → 在 `providers/__init__.py` 注册。
 
 ## 代码输入规则
 
@@ -81,14 +105,24 @@ MINIMA_API_KEY=<key>
 
 ## 错误处理
 
-- API连接失败 → 脚本报错退出，提示检查网络
+- `TUSHARE_API_TOKEN` 为空 → 数据获取失败，脚本报错退出
+- API 连接失败 → 脚本报错退出，提示检查网络
 - 代码无法识别 → 提示用户检查代码或名称
-- AI建议调用失败 → 自动降级为规则化建议（不影响报告）
+- AI 建议调用失败 → 自动降级为规则化建议（不影响报告生成）
+- 互联网研究失败/超时 → 自动跳过（不影响报告生成）
 
 ## 配置文件
 
-`config.py` 管理所有配置项，一般无需修改：
-- `TUSHARE_API_URL` / `TUSHARE_API_TOKEN`：数据源
-- `MINIMA_API_URL` / `MINIMA_MODEL`：AI模型
-- `ETF_INDEX_MAP`：ETF→跟踪指数映射
-- 评估阈值：`PE_HIGH`、`FEE_EXCELLENT` 等
+`config.py` 统一管理所有配置，优先从 `.env` 环境变量读取：
+
+**Provider 选择**：`DATA_PROVIDER` / `LLM_PROVIDER` / `SEARCH_PROVIDER`
+
+**数据源**：`TUSHARE_API_URL` / `TUSHARE_API_TOKEN`
+
+**AI模型**：
+- MiniMax：`MINIMA_API_URL` / `MINIMA_MODEL` / `MINIMA_API_KEY`
+- OpenAI兼容：`OPENAI_API_URL` / `OPENAI_MODEL` / `OPENAI_API_KEY`
+
+**搜索**：`TAVILY_API_KEY`（Tavily 模式时需要）
+
+**业务参数**：`ETF_INDEX_MAP`、`PE_HIGH`、`FEE_EXCELLENT` 等评估阈值
