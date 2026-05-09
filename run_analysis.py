@@ -2,25 +2,26 @@
 """
 统一入口脚本：输入股票/基金名称或代码，自动识别类型、获取数据、生成PDF报告
 
-使用方式：
+使用方式（单只分析）：
     python3 run_analysis.py 贵州茅台
     python3 run_analysis.py 600519
-    python3 run_analysis.py 腾讯控股
-    python3 run_analysis.py 00700.HK
-    python3 run_analysis.py 沪深300ETF
-    python3 run_analysis.py 510300
+
+使用方式（多只对比）：
+    python3 run_analysis.py 贵州茅台 五粮液 泸州老窖
+    python3 run_analysis.py 510300 510500 159915
 """
 
 import sys
 import os
 import json
+import re
 from datetime import datetime
 
 # 确保在项目目录下运行
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_DIR)
 
-from config import ETF_INDEX_MAP
+from config import ETF_INDEX_MAP, MAX_COMPARE_COUNT
 from providers import get_data_provider, get_search_provider
 
 
@@ -164,22 +165,172 @@ def run(user_input: str):
     return output_path
 
 
+def _is_single_name(args: list) -> bool:
+    """判断多个参数是否构成一个名称（如 "贵州 茅台" → 真，"贵州茅台 五粮液" → 假）"""
+    # 如果只有一个参数，肯定是单个输入
+    if len(args) <= 1:
+        return True
+    # 如果每个参数都像代码（纯数字或含.HK/.SH/.SZ），则是多个独立输入
+    code_pattern = re.compile(r"^\d{5,6}(\.(?:SH|SZ|HK))?$", re.IGNORECASE)
+    if all(code_pattern.match(a) for a in args):
+        return False
+    # 如果任一参数含中文且单独能构成证券名称（≥2个中文字符），视为多个独立输入
+    cn_args = [a for a in args if re.search(r"[\u4e00-\u9fff]{2,}", a)]
+    if len(cn_args) >= 2:
+        return False
+    # 否则视为一个名称的多个词（如 "沪深 300 ETF"）
+    return True
+
+
+def run_comparison(inputs: list):
+    """对比模式：多只标的横向对比"""
+    _print_banner()
+    print("  📊 对比分析模式（%d 只标的）" % len(inputs))
+    print()
+
+    if len(inputs) > MAX_COMPARE_COUNT:
+        print(f"✗ 最多同时对比 {MAX_COMPARE_COUNT} 只，当前输入了 {len(inputs)} 只")
+        sys.exit(1)
+
+    # 初始化 providers
+    data_provider = get_data_provider()
+    search_provider = get_search_provider()
+    from identify_code_type import resolve_input
+
+    # 逐个解析、识别、获取数据
+    all_results = []  # [{ts_code, code_type, name, meta, data, data_file}, ...]
+
+    for i, user_input in enumerate(inputs, 1):
+        print("=" * 60)
+        print(f"  标的 {i}/{len(inputs)}：「{user_input}」")
+        print("=" * 60)
+
+        # 解析
+        try:
+            ts_code = resolve_input(user_input)
+        except ValueError as e:
+            print(f"  ✗ 解析失败：{e}，跳过")
+            continue
+        print(f"  → 代码：{ts_code}")
+
+        # 识别
+        try:
+            code_type, meta = data_provider.identify_security(ts_code)
+        except ValueError as e:
+            print(f"  ✗ 识别失败：{e}，跳过")
+            continue
+
+        stock_name = meta.get("name", ts_code)
+        print(f"  → 类型：{code_type}　名称：{stock_name}")
+
+        # 获取数据
+        print(f"  → 正在获取数据...")
+        if code_type == "etf":
+            code_prefix = ts_code.split(".")[0]
+            index_code = ETF_INDEX_MAP.get(code_prefix, "000300.SH")
+            result = data_provider.fetch_etf_data(ts_code, index_code)
+        elif code_type == "stock":
+            result = data_provider.fetch_stock_data(ts_code)
+        elif code_type == "hk_stock":
+            result = data_provider.fetch_hk_stock_data(ts_code)
+        else:
+            print(f"  ✗ 不支持的类型：{code_type}，跳过")
+            continue
+
+        if not result:
+            print(f"  ✗ 数据获取失败，跳过")
+            continue
+
+        # 互联网研究
+        if code_type in ("stock", "hk_stock") and search_provider.is_available():
+            try:
+                market_label = "A股" if code_type == "stock" else "港股"
+                research = search_provider.search_company(stock_name, ts_code, market_label)
+                if research.get("status") == "success":
+                    result["web_research"] = research
+            except Exception:
+                pass
+
+        # 保存临时文件
+        data_file = os.path.join(PROJECT_DIR, f"temp_{ts_code.replace('.', '_')}_data.json")
+        with open(data_file, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+
+        all_results.append({
+            "ts_code": ts_code,
+            "code_type": code_type,
+            "name": stock_name,
+            "meta": meta,
+            "data": result,
+            "data_file": data_file,
+        })
+        print(f"  ✓ 完成")
+        print()
+
+    if len(all_results) < 2:
+        print(f"\n✗ 成功获取数据的标的不足2只（{len(all_results)}只），无法生成对比报告")
+        sys.exit(1)
+
+    # 判断对比类型
+    types = [r["code_type"] for r in all_results]
+    if len(set(types)) == 1:
+        compare_type = types[0]  # 纯 etf / stock / hk_stock
+    else:
+        compare_type = "mixed"   # 混合对比
+
+    # 生成对比报告
+    print("=" * 60)
+    print(f"  生成对比分析报告（{len(all_results)}只标的）")
+    print("=" * 60)
+
+    names = [r["name"] for r in all_results]
+    date_str = datetime.now().strftime("%Y%m%d")
+    output_filename = "_vs_".join(names) + f"_对比分析报告_{date_str}.pdf"
+    output_path = os.path.join(PROJECT_DIR, output_filename)
+
+    from step6_generate_comparison_pdf import create_comparison_pdf
+    create_comparison_pdf(all_results, compare_type, output_path)
+
+    # 完成
+    print()
+    print("╔══════════════════════════════════════════════════════════════╗")
+    print("║  ✓ 对比报告生成完成！                                      ║")
+    print("╚══════════════════════════════════════════════════════════════╝")
+    print(f"  标的：{'、'.join(names)}")
+    print(f"  报告：{output_filename}")
+    print(f"  路径：{output_path}")
+    print()
+
+    return output_path
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         _print_banner()
         print("用法：")
-        print("  python3 run_analysis.py <股票名称或代码>")
+        print("  python3 run_analysis.py <名称或代码>           # 单只分析")
+        print("  python3 run_analysis.py <标的1> <标的2> ...    # 多只对比（最多5只）")
         print()
-        print("示例：")
-        print("  python3 run_analysis.py 贵州茅台      # 按名称搜索A股")
+        print("示例（单只）：")
+        print("  python3 run_analysis.py 贵州茅台      # A股")
         print("  python3 run_analysis.py 600519        # A股代码")
-        print("  python3 run_analysis.py 腾讯控股      # 按名称搜索港股")
-        print("  python3 run_analysis.py 00700.HK      # 港股代码")
-        print("  python3 run_analysis.py 沪深300ETF    # ETF名称")
-        print("  python3 run_analysis.py 510300        # ETF代码（6位以5开头）")
+        print("  python3 run_analysis.py 腾讯控股      # 港股")
+        print("  python3 run_analysis.py 510300        # ETF")
+        print()
+        print("示例（对比）：")
+        print("  python3 run_analysis.py 贵州茅台 五粮液 泸州老窖    # A股对比")
+        print("  python3 run_analysis.py 510300 510500 159915        # ETF对比")
+        print("  python3 run_analysis.py 比亚迪 00175.HK             # 跨市场对比")
         print()
         sys.exit(0)
 
-    # 支持多个词连在一起作为名称（如 "贵州 茅台"）
-    user_input = " ".join(sys.argv[1:])
-    run(user_input)
+    args = sys.argv[1:]
+
+    # 判断是单个输入还是多个对比
+    if _is_single_name(args):
+        # 单只分析模式
+        user_input = " ".join(args)
+        run(user_input)
+    else:
+        # 多只对比模式
+        run_comparison(args)

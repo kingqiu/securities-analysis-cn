@@ -1,6 +1,8 @@
 # 证券分析 - 全局配置文件
 
 import os as _os
+import time as _time
+import threading as _threading
 
 # ============================================================
 # 环境变量加载（优先从 .env 文件读取）
@@ -97,4 +99,53 @@ STOCK_DAILY_DAYS = 250      # 近250个交易日行情
 TOP_HOLDERS_COUNT = 10      # 前十大股东
 PE_HIGH = 50.0              # PE高于此值为高估
 PE_LOW = 15.0               # PE低于此值为低估
+
+# 对比分析配置
+MAX_COMPARE_COUNT = 5       # 最多同时对比5只标的
+
+# ============================================================
+# API 限流器（Tushare 接口限制 120次/分钟）
+# ============================================================
+API_RATE_LIMIT = int(_os.environ.get("API_RATE_LIMIT", "110"))  # 安全余量，默认110次/分钟
+_API_WINDOW = 60  # 时间窗口（秒）
+
+
+class _RateLimiter:
+    """
+    滑动窗口限流器。
+    记录最近 _API_WINDOW 秒内的调用时间戳，
+    如果已达上限则自动 sleep 等待，直到窗口滑过。
+    线程安全。
+    """
+
+    def __init__(self, max_calls: int, window: int):
+        self._max_calls = max_calls
+        self._window = window
+        self._timestamps: list[float] = []
+        self._lock = _threading.Lock()
+
+    def acquire(self):
+        """在发起 API 调用前调用此方法，必要时会自动等待"""
+        with self._lock:
+            now = _time.time()
+            cutoff = now - self._window
+            # 清除过期时间戳
+            self._timestamps = [t for t in self._timestamps if t > cutoff]
+
+            if len(self._timestamps) >= self._max_calls:
+                # 需要等待：算出最早那条记录何时过期
+                wait_time = self._timestamps[0] - cutoff
+                if wait_time > 0:
+                    print(f"  ⏳ API限流：已达{self._max_calls}次/分钟上限，等待 {wait_time:.1f}s ...")
+                    _time.sleep(wait_time + 0.1)  # 额外0.1s安全余量
+                    # 清理过期时间戳
+                    now = _time.time()
+                    cutoff = now - self._window
+                    self._timestamps = [t for t in self._timestamps if t > cutoff]
+
+            self._timestamps.append(_time.time())
+
+
+# 全局单例限流器，所有 call_api 共享
+api_rate_limiter = _RateLimiter(API_RATE_LIMIT, _API_WINDOW)
 

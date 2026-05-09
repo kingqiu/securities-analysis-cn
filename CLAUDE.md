@@ -24,6 +24,7 @@
 ├── step3_generate_pdf_report.py    # ETF PDF 报告生成（reportlab + matplotlib）
 ├── step4_generate_stock_pdf.py     # A股 PDF 报告生成（16 章节）
 ├── step5_generate_hk_stock_pdf.py  # 港股 PDF 报告生成（10 章节）
+├── step6_generate_comparison_pdf.py # 多标的对比 PDF 报告（股票10章 / ETF10章 + 说人话解读）
 ├── .env                            # 敏感配置（gitignored）
 ├── .env.example                    # 环境变量模板
 ├── SKILL.md                        # Skill 定义（agent 系统入口）
@@ -33,13 +34,20 @@
 ## 核心数据流
 
 ```
-用户输入（名称/代码）
-  → resolve_input()          # 名称搜索或代码标准化
-  → DataProvider.identify()  # 判断 etf / stock / hk_stock
-  → DataProvider.fetch_*()   # 拉取行情+财务+股东等多维数据
-  → SearchProvider.search()  # AI 互联网研究（可选）
-  → 数据写入 temp JSON
-  → create_*_pdf()           # 读取 JSON → 计算指标 → 调用 LLMProvider → 生成 PDF
+单只模式：
+  用户输入（名称/代码）
+    → resolve_input()          # 名称搜索或代码标准化
+    → DataProvider.identify()  # 判断 etf / stock / hk_stock
+    → DataProvider.fetch_*()   # 拉取行情+财务+股东等多维数据
+    → SearchProvider.search()  # AI 互联网研究（可选）
+    → 数据写入 temp JSON
+    → create_*_pdf()           # 读取 JSON → 计算指标 → 调用 LLMProvider → 生成 PDF
+
+对比模式（多只输入，空格分隔）：
+  多只输入
+    → 逐只 resolve + identify + fetch
+    → get_comparison_advice()  # AI 对比建议（通俗化 Prompt）
+    → create_comparison_pdf()  # 对比报告（含归一化走势图+柱状图+综合评分）
 ```
 
 ## 关键约定
@@ -55,5 +63,9 @@
 
 - 编辑 Provider：修改 `providers/` 下对应文件，实现基类接口
 - 新增数据字段：在 `step1_fetch_*.py` 中添加 API 调用 → 在 `step*_generate_*_pdf.py` 的 `_load()` 中加载 → 在 `create_*_pdf()` 中添加展示逻辑
-- 修改 AI Prompt：编辑 `ai_analysis.py` 中的 `_STOCK_PROMPT` / `_HK_STOCK_PROMPT` / `_ETF_PROMPT`
-- 运行测试：`python3 run_analysis.py 泡泡玛特`（港股端到端验证）
+- 修改 AI Prompt：编辑 `ai_analysis.py` 中的 `_STOCK_PROMPT` / `_HK_STOCK_PROMPT` / `_ETF_PROMPT` / `_STOCK_COMPARISON_PROMPT` / `_ETF_COMPARISON_PROMPT`
+- 对比报告「说人话」文本：编辑 `step6_generate_comparison_pdf.py` 中各章节的 `st["explain"]` 段落
+- 运行测试：
+  - 单只：`python3 run_analysis.py 泡泡玛特`
+  - 对比：`python3 run_analysis.py 贵州茅台 五粮液`
+  - ETF对比：`python3 run_analysis.py 510300 510500`

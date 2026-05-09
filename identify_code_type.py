@@ -6,9 +6,11 @@
 
 import requests
 from config import TUSHARE_API_URL as API_URL, TUSHARE_API_TOKEN as API_TOKEN
+from config import api_rate_limiter
 
 
 def _call_api(api_name, params):
+    api_rate_limiter.acquire()
     data = {
         "api_name": api_name,
         "token": API_TOKEN,

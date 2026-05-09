@@ -8,6 +8,7 @@ import json
 from datetime import datetime, timedelta
 import time
 from config import TUSHARE_API_URL as API_URL, TUSHARE_API_TOKEN as API_TOKEN, STOCK_DAILY_DAYS, STOCK_FINANCIAL_YEARS
+from config import api_rate_limiter
 
 api_call_count = 0
 
@@ -15,6 +16,7 @@ api_call_count = 0
 def call_api(api_name, params, fields=""):
     global api_call_count
     api_call_count += 1
+    api_rate_limiter.acquire()
     data = {
         "api_name": api_name,
         "token": API_TOKEN,

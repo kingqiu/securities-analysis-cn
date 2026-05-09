@@ -67,6 +67,46 @@ _STOCK_PROMPT = """你是一位资深的卖方研究员。请基于以下多维�
 
 _FALLBACK = "暂无AI分析建议（API调用失败）"
 
+_STOCK_COMPARISON_PROMPT = """你是一位经验丰富的投资顾问，正在向一位完全没有金融背景的朋友解释多只股票的对比分析结果。
+
+{industry_context}
+
+以下是{count}只股票的核心数据：
+
+{data_table}
+
+请给出：
+1. **综合排序**：如果只能买一只，你推荐哪只？从最推荐到最不推荐排序。
+2. **各自优劣势**：每只股票用2-3句话说清核心优势和最大风险。
+3. **估值解读**：谁便宜谁贵？贵的是否有道理（比如增速更快）？
+4. **适合什么人**：每只股票适合什么类型的投资者（稳健型/成长型/激进型）？
+
+要求：
+- 每个专业术语第一次出现时，用括号加一句大白话解释
+- 多用比喻和生活化类比（如"开店""存银行""买手机"）
+- 结论要明确，不要模棱两可
+- 风险提示要具体，说清楚"最坏情况下可能亏多少"
+- 总字数400字以内"""
+
+_ETF_COMPARISON_PROMPT = """你是一位经验丰富的基金顾问，正在向一位完全没有金融背景的朋友解释多只ETF基金的对比分析结果。
+
+以下是{count}只ETF的核心数据：
+
+{data_table}
+
+请给出：
+1. **该选哪个赛道**：这几只ETF分别追踪什么方向？哪个方向当前更有投资价值？
+2. **产品优劣对比**：费率、跟踪精度、规模、流动性谁更好？
+3. **收益与风险**：过去谁赚得多？谁波动小？谁"性价比"最高？
+4. **适合什么人**：每只ETF适合什么类型的投资者？
+
+要求：
+- 每个专业术语第一次出现时，用括号加一句大白话解释
+- 多用比喻（如"买套餐""复印机""坐过山车"）
+- 把ETF比作日常生活中的东西，让完全不懂金融的人也能明白
+- 结论要明确："如果让我选一个，我选XX，因为..."
+- 总字数400字以内"""
+
 _HK_STOCK_PROMPT = """你是一位专业的港股分析师。请基于以下量化数据，对{name}（{ts_code}）给出简洁的投资建议。
 
 数据摘要：
@@ -313,4 +353,67 @@ def get_investment_advice(security_type: str, summary_data: dict) -> str:
     ai_text = _call_llm(prompt)
     if ai_text == _FALLBACK:
         return _fallback_advice(security_type, summary_data)
+    return ai_text
+
+
+def get_comparison_advice(compare_type: str, summaries: list) -> str:
+    """
+    生成多标的对比分析的 AI 建议。
+
+    参数:
+        compare_type: "stock" / "hk_stock" / "etf" / "mixed"
+        summaries: 每只标的的摘要字典列表
+    返回:
+        str - 通俗易懂的对比分析文字
+    """
+    print("  调用 AI 生成对比分析建议...")
+
+    count = len(summaries)
+
+    # 构建数据表格文本
+    if compare_type == "etf":
+        lines = []
+        for s in summaries:
+            lines.append(
+                f"【{s.get('name', '?')}（{s.get('ts_code', '?')}）】\n"
+                f"  近1月/3月/1年收益率：{s.get('ret_1m', 'N/A')}% / {s.get('ret_3m', 'N/A')}% / {s.get('ret_1y', 'N/A')}%\n"
+                f"  年化跟踪误差：{s.get('tracking_error', 'N/A')}%\n"
+                f"  综合费率：{s.get('total_fee', 'N/A')}%/年\n"
+                f"  基金规模：{s.get('aum', 'N/A')}亿元\n"
+                f"  跟踪指数PE分位：{s.get('index_pe_pct', 'N/A')}%"
+            )
+        data_table = "\n\n".join(lines)
+        prompt = _ETF_COMPARISON_PROMPT.format(count=count, data_table=data_table)
+    else:
+        # stock / hk_stock / mixed 通用
+        industries = [s.get("industry", "未知") for s in summaries]
+        if len(set(industries)) == 1:
+            industry_context = f"这{count}只股票都属于【{industries[0]}】行业，可以直接横向对比。"
+        else:
+            industry_context = (
+                f"注意：这{count}只股票分属不同行业（{'、'.join(set(industries))}），"
+                "估值体系不同，不能简单比较PE高低，需要结合各行业特点分析。"
+            )
+
+        lines = []
+        for s in summaries:
+            lines.append(
+                f"【{s.get('name', '?')}（{s.get('ts_code', '?')}）— {s.get('industry', '未知')}】\n"
+                f"  市值：{s.get('market_cap', 'N/A')}亿元\n"
+                f"  PE(TTM)：{s.get('pe_ttm', 'N/A')}　PB：{s.get('pb', 'N/A')}\n"
+                f"  营收增速：{s.get('rev_growth', 'N/A')}%　净利增速：{s.get('profit_growth', 'N/A')}%\n"
+                f"  ROE：{s.get('roe', 'N/A')}%　毛利率：{s.get('gross_margin', 'N/A')}%\n"
+                f"  资产负债率：{s.get('debt_ratio', 'N/A')}%\n"
+                f"  股息率：{s.get('dividend_yield', 'N/A')}%"
+            )
+        data_table = "\n\n".join(lines)
+        prompt = _STOCK_COMPARISON_PROMPT.format(
+            industry_context=industry_context, count=count, data_table=data_table
+        )
+
+    ai_text = _call_llm(prompt)
+    if ai_text == _FALLBACK:
+        # 降级：简单文本摘要
+        names = [s.get("name", "?") for s in summaries]
+        return f"AI服务暂不可用。以下{count}只标的（{'、'.join(names)}）的详细数据请参考后续各章节图表。"
     return ai_text

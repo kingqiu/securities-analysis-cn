@@ -11,6 +11,7 @@ import pandas as pd
 import time
 import re
 from config import TUSHARE_API_URL as API_URL, TUSHARE_API_TOKEN as API_TOKEN
+from config import api_rate_limiter
 
 # API 调用计数器
 api_call_count = 0
@@ -20,6 +21,7 @@ def call_api(api_name, params, fields=""):
     """调用 API"""
     global api_call_count
     api_call_count += 1
+    api_rate_limiter.acquire()
 
     data = {
         "api_name": api_name,
