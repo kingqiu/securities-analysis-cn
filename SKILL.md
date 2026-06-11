@@ -1,14 +1,12 @@
 ---
-name: securities-analysis-cn
-description: >
-  Generate Chinese securities research-review PDF reports for A-shares, Hong Kong stocks, listed ETFs,
-  and multi-security comparisons. Use when the user asks to analyze a Chinese security, compare
-  multiple securities, review valuation/fundamentals/liquidity/risk evidence, or produce a PDF
-  research report from a ticker or Chinese name such as 600519, 贵州茅台, 00700.HK, 腾讯控股, 510300,
-  or 沪深300ETF. The skill should not present direct buy/sell advice.
+name: 股基研究助手
+version: 1.0.0
+description: 帮普通用户看懂股票、港股和 ETF 的研究框架，生成非荐股导向的中文研究复盘 PDF 报告。
 ---
 
-# securities-analysis-cn
+# 股基研究助手
+
+帮普通用户看懂股票、港股和 ETF 的研究框架。
 
 Generate PDF research reports for A-shares, Hong Kong stocks, listed ETFs, and multi-security comparisons.
 
