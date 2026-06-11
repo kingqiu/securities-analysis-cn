@@ -68,7 +68,7 @@ class TavilySearchProvider(SearchProvider):
                 "quality": self._quality_summary(sections),
             }
 
-        sections = self._build_sections(company_name, industry, company_results, industry_results, analyst_results)
+        sections = self._build_sections(company_name, ts_code, industry, company_results, industry_results, analyst_results)
         quality = self._quality_summary(sections)
         return {
             "status": "success",
@@ -158,6 +158,8 @@ class TavilySearchProvider(SearchProvider):
 
     def _collect_industry_results(self, company_name, ts_code, industry):
         terms = self._industry_terms(industry)
+        if not industry:
+            terms = [company_name] + self._company_aliases(company_name, ts_code)
         query_terms = " ".join(terms[:5])
         queries = [
             f"{query_terms} 行业最新政策 供需 价格 竞争格局",
@@ -346,6 +348,10 @@ class TavilySearchProvider(SearchProvider):
             return "白酒"
         if any(name in company_name for name in ("腾讯", "阿里", "美团", "京东", "网易", "快手", "百度")):
             return "互联网"
+        if any(name in company_name for name in ("泡泡玛特", "名创优品")):
+            return "潮玩"
+        if any(name in company_name for name in ("宁德时代", "亿纬锂能", "国轩高科")):
+            return "动力电池"
         return ""
 
     def _industry_terms(self, industry):
@@ -353,9 +359,13 @@ class TavilySearchProvider(SearchProvider):
             return ["白酒", "高端白酒", "茅台", "五粮液", "泸州老窖", "批价", "库存", "动销", "baijiu", "moutai"]
         if industry == "互联网":
             return ["互联网", "游戏", "广告", "云计算", "AI", "腾讯", "社交", "视频号", "Tencent", "Alibaba", "Meituan"]
+        if industry == "潮玩":
+            return ["潮玩", "IP玩具", "IP消费", "盲盒", "玩具", "泡泡玛特", "Pop Mart", "LABUBU", "出海", "门店"]
+        if industry == "动力电池":
+            return ["动力电池", "锂电池", "储能电池", "新能源汽车", "宁德时代", "CATL", "电池材料", "装机量"]
         if industry:
             return [industry, f"{industry}行业", "龙头", "政策", "供需", "价格", "竞争格局"]
-        return ["行业", "龙头", "政策", "供需", "价格", "竞争格局"]
+        return []
 
     def _company_aliases(self, company_name, ts_code):
         aliases = []
@@ -366,6 +376,10 @@ class TavilySearchProvider(SearchProvider):
             aliases.extend(["Kweichow Moutai", "Moutai", "baijiu"])
         if "腾讯" in company_name:
             aliases.extend(["Tencent", "Tencent Holdings", "WeChat", "Weixin"])
+        if "泡泡玛特" in company_name:
+            aliases.extend(["Pop Mart", "PopMart", "LABUBU", "Molly"])
+        if "宁德时代" in company_name:
+            aliases.extend(["CATL", "Contemporary Amperex", "动力电池"])
         if "阿里" in company_name:
             aliases.extend(["Alibaba", "BABA"])
         if "美团" in company_name:
@@ -381,10 +395,10 @@ class TavilySearchProvider(SearchProvider):
             "catalysts": "公开搜索证据不足时，后续重点跟踪定期报告、分红回购、政策变化、价格与成交确认信号。",
         }
 
-    def _build_sections(self, company_name, industry, company_results, industry_results, analyst_results):
-        company_cards = self._cards(company_results, limit=3, category="company")
-        industry_cards = self._cards(industry_results, limit=4, category="industry")
-        analyst_cards = self._cards(analyst_results, limit=3, category="analyst")
+    def _build_sections(self, company_name, ts_code, industry, company_results, industry_results, analyst_results):
+        company_cards = self._cards(company_results, limit=3, category="company", company_name=company_name, ts_code=ts_code)
+        industry_cards = self._cards(industry_results, limit=4, category="industry", company_name=company_name, industry=industry)
+        analyst_cards = self._cards(analyst_results, limit=3, category="analyst", company_name=company_name, ts_code=ts_code)
 
         risk_cards = [c for c in company_cards + industry_cards if c["tone"] in ("风险", "中性偏负")]
         catalyst_cards = [c for c in company_cards + industry_cards if c["tone"] in ("正面", "中性偏正")]
@@ -414,7 +428,7 @@ class TavilySearchProvider(SearchProvider):
             ),
         }
 
-    def _cards(self, results, limit=4, category="general"):
+    def _cards(self, results, limit=4, category="general", company_name="", ts_code="", industry=""):
         cards = []
         seen = set()
         for item in results:
@@ -426,6 +440,10 @@ class TavilySearchProvider(SearchProvider):
             content = self._result_text(item, 700)
             if not title or self._is_low_quality(title):
                 continue
+            if category in ("company", "analyst") and company_name and not self._mentions_company(item, company_name, ts_code):
+                continue
+            if category == "industry" and industry and not self._mentions_industry_context(item, industry, company_name, ts_code):
+                continue
             if self._is_low_quality(content):
                 content = ""
             if self._looks_title_only(item) and len(content) < 50:
@@ -433,6 +451,9 @@ class TavilySearchProvider(SearchProvider):
             summary = self._best_summary(title, content, category)
             if not summary or self._is_low_quality(summary):
                 continue
+            if category in ("company", "analyst") and company_name:
+                if not self._text_mentions_company(f"{title} {summary}", company_name, ts_code):
+                    continue
             if self._is_old_background(summary):
                 continue
             if not self._has_useful_signal(title + " " + summary, category):
@@ -464,6 +485,38 @@ class TavilySearchProvider(SearchProvider):
             if len(cards) >= limit:
                 break
         return cards
+
+    def _mentions_company(self, item, company_name, ts_code=""):
+        code_core = (ts_code or "").split(".")[0]
+        tokens = [company_name, ts_code, code_core] + self._company_aliases(company_name, ts_code)
+        tokens = [str(t).lower() for t in tokens if t]
+        # 公司事件要求搜索结果本身就明确指向公司，避免抽取正文中偶然提到公司导致行业背景误入。
+        haystack = " ".join([
+            str(item.get("title") or ""),
+            str(item.get("content") or ""),
+            str(item.get("url") or ""),
+        ]).lower()
+        return any(token in haystack for token in tokens)
+
+    def _text_mentions_company(self, text, company_name, ts_code=""):
+        code_core = (ts_code or "").split(".")[0]
+        tokens = [company_name, ts_code, code_core] + self._company_aliases(company_name, ts_code)
+        tokens = [str(t).lower() for t in tokens if t]
+        haystack = str(text or "").lower()
+        return any(token in haystack for token in tokens)
+
+    def _mentions_industry_context(self, item, industry, company_name="", ts_code=""):
+        tokens = self._industry_terms(industry)
+        if not tokens and company_name:
+            tokens = [company_name] + self._company_aliases(company_name, ts_code)
+        tokens = [str(t).lower() for t in tokens if t]
+        haystack = " ".join([
+            str(item.get("title") or ""),
+            str(item.get("content") or ""),
+            str(item.get("raw_content") or ""),
+            str(item.get("url") or ""),
+        ]).lower()
+        return any(token in haystack for token in tokens)
 
     def _unique_cards(self, cards):
         seen = set()
@@ -519,6 +572,8 @@ class TavilySearchProvider(SearchProvider):
         return text
 
     def _theme(self, text):
+        if any(word in text for word in ("潮玩", "盲盒", "IP", "谷子", "二次元", "卡牌", "玩具", "LABUBU", "Molly", "泡泡玛特")):
+            return "IP消费/潮玩"
         if any(word in text for word in ("营业总收入", "营收", "收入", "净利润", "业绩", "盈利预测")):
             return "业绩/预期"
         if any(word in text for word in ("分红", "回购", "股息")):

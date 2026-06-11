@@ -80,6 +80,38 @@ _STOCK_PROMPT = """你是一位资深的证券研究员。请基于以下量化�
 
 _FALLBACK = "暂无AI研究解读（API调用失败）"
 
+_PROMPT_LEAK_MARKERS = (
+    "the user wants",
+    "the system says",
+    "system says",
+    "developer message",
+    "we need to",
+    "let's draft",
+    "i need to",
+    "prompt",
+    "instruction",
+    "instructions",
+    "final answer",
+    "analysis:",
+    "assistant:",
+    "user:",
+    "system:",
+)
+
+_FORBIDDEN_TRADING_TERMS = (
+    "买入",
+    "卖出",
+    "建仓",
+    "加仓",
+    "减仓",
+    "止盈",
+    "止损",
+    "仓位建议",
+    "稳赚",
+    "最佳买点",
+    "必须买入",
+)
+
 _STOCK_COMPARISON_PROMPT = """你是一位经验丰富的证券研究员，正在向一位完全没有金融背景的朋友解释多只股票的对比分析结果。
 
 {industry_context}
@@ -294,6 +326,32 @@ def _call_llm(prompt: str) -> str:
         return _FALLBACK
 
 
+def _ascii_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    ascii_count = sum(1 for ch in text if ord(ch) < 128 and ch.isalpha())
+    return ascii_count / max(len(text), 1)
+
+
+def _is_unsafe_llm_output(text: str) -> bool:
+    """识别提示词泄露、内部推理泄露和直接交易建议类异常输出。"""
+    if not text or text == _FALLBACK:
+        return True
+
+    lower = text.lower()
+    if any(marker in lower for marker in _PROMPT_LEAK_MARKERS):
+        return True
+
+    # 正常中文报告里可能有少量英文指标，但不应大段英文叙述。
+    if _ascii_ratio(text) > 0.35 and len(text) > 160:
+        return True
+
+    if any(term in text for term in _FORBIDDEN_TRADING_TERMS):
+        return True
+
+    return False
+
+
 def get_investment_advice(security_type: str, summary_data: dict) -> str:
     """
     生成研究解读文字。
@@ -391,7 +449,9 @@ def get_investment_advice(security_type: str, summary_data: dict) -> str:
         return _fallback_advice(security_type, summary_data)
 
     ai_text = _call_llm(prompt)
-    if ai_text == _FALLBACK:
+    if _is_unsafe_llm_output(ai_text):
+        if ai_text != _FALLBACK:
+            print("  ⚠ AI 输出未通过质检，改用规则化研究解读")
         return _fallback_advice(security_type, summary_data)
     return ai_text
 
@@ -454,7 +514,7 @@ def get_comparison_advice(compare_type: str, summaries: list) -> str:
         )
 
     ai_text = _call_llm(prompt)
-    if ai_text == _FALLBACK:
+    if _is_unsafe_llm_output(ai_text):
         # 降级：简单文本摘要
         names = [s.get("name", "?") for s in summaries]
         return f"模型服务暂不可用。以下{count}只标的（{'、'.join(names)}）的详细数据请参考后续各章节图表。"
