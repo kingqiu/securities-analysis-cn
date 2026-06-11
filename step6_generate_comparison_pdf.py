@@ -32,7 +32,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 
 from ai_analysis import get_comparison_advice
 from config import md_to_rl, md_to_story
-from pdf_design import add_cover, draw_report_footer
+from pdf_design import add_cover, add_report_reading_guide, draw_report_footer
 
 # ── 字体注册 ──────────────────────────────────────────────────────────────────
 
@@ -157,6 +157,13 @@ def _sanitize_guidance_text(text):
         "止损": "风险复核",
         "仓位": "关注比例",
         "最佳选择": "证据相对更充分的样本",
+        "更适合从": "可优先从",
+        "适合长期放着当": "可作为长期核心暴露观察",
+        "适合从": "可从",
+        "想稳一点、流动性好，选": "若关注稳健与流动性，可观察",
+        "能承受波动、追求弹性，选": "若关注弹性和波动承受，可观察",
+        "选“大企业俱乐部”": "观察“大企业俱乐部”暴露",
+        "选“中型企业拼盘”": "观察“中型企业拼盘”暴露",
     }
     for src, dst in replacements.items():
         value = value.replace(src, dst)
@@ -691,6 +698,8 @@ def create_comparison_pdf(all_results, compare_type, output_path):
         notes=_comparison_cover_notes(compare_type, summaries, names),
         questions=_comparison_cover_questions(compare_type),
     )
+
+    add_report_reading_guide(story, kind=cover_kind, report_type="comparison")
 
     # ── 根据对比类型生成不同内容 ──
     if compare_type == "etf":

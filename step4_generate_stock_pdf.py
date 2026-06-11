@@ -37,6 +37,7 @@ from peer_model import build_peer_view, render_peer_brief
 from pdf_design import (
     CN_FONT as SHARED_CN_FONT,
     add_cover,
+    add_report_reading_guide,
     build_styles,
     callout_box,
     draw_report_footer,
@@ -761,6 +762,8 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
             ["主要风险", "消费需求、行业竞争、政策变化、估值中枢下移及市场系统性波动。"],
         ],
     )
+
+    add_report_reading_guide(story, kind="stock")
 
     # ── 一、公司概况 ──
     story.append(Paragraph("一、公司概况", st["h1"]))

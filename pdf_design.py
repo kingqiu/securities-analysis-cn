@@ -435,6 +435,115 @@ def evidence_map(story, rows, kind="stock"):
     story.append(Spacer(1, 0.3 * cm))
 
 
+def add_report_reading_guide(story, kind="stock", report_type="single"):
+    styles = build_styles(kind)
+    theme = theme_for(kind)
+    head_style = ParagraphStyle(
+        "GuideHead",
+        fontName=CN_FONT,
+        fontSize=8.0,
+        leading=11,
+        textColor=colors.HexColor(theme["ink"]),
+        alignment=1,
+    )
+    cell_style = ParagraphStyle(
+        "GuideCell",
+        fontName=CN_FONT,
+        fontSize=7.9,
+        leading=11.2,
+        textColor=colors.HexColor(theme["ink"]),
+    )
+
+    def _guide_table(headers, rows, widths):
+        table_data = [[Paragraph(str(item), head_style) for item in headers]]
+        table_data.extend([[Paragraph(str(item), cell_style) for item in row] for row in rows])
+        table = styled_table(table_data, col_widths=widths, kind=kind, compact=True)
+        table.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        return table
+
+    story.append(Paragraph("如何阅读本报告", styles["h1"]))
+    story.append(callout_box(
+        "本报告用于把公开行情、财务、估值、资金、产品和新闻信息整理成研究框架。建议把结论理解为“需要继续观察的问题清单”，而不是对价格方向或交易动作的判断。",
+        kind,
+    ))
+    story.append(Spacer(1, 0.12 * cm))
+
+    if report_type == "comparison":
+        reading_rows = [
+            ["对比范围", "先确认标的是否处在相近市场、行业、指数或产品类型。", "综合得分只是相对证据排序，不代表配置结论。"],
+            ["指标比较", "重点看估值、成长、盈利质量、现金流、规模、费用和流动性。", "跨行业、跨市场、跨币种指标不能简单横向等同。"],
+            ["模型解读", "把模型文字当作阅读提示，回到原始数据验证分歧。", "模型解读不是交易判断，也不能替代个人风险约束。"],
+        ]
+    elif kind == "etf":
+        reading_rows = [
+            ["指数暴露", "先看跟踪指数、估值分位、行业权重和成分集中度。", "指数估值偏低不代表未来一定上涨。"],
+            ["产品质量", "再看跟踪误差、费率、规模、成交额和折溢价。", "短期涨跌不能替代产品质量判断。"],
+            ["观察触发器", "用于复盘估值、流动性和跟踪质量是否变化。", "触发器不是配置或交易指令。"],
+        ]
+    elif kind == "hk":
+        reading_rows = [
+            ["基本面与估值", "先看盈利质量、估值、业务分部和监管敏感度。", "低估值可能包含流动性折价或风险补偿。"],
+            ["港股特有变量", "重点看南向资金、成交额、汇率、分红和回购。", "短期资金流不等于基本面变化。"],
+            ["观察触发器", "用于复核估值、流动性和汇率假设。", "触发器不是买卖判断。"],
+        ]
+    else:
+        reading_rows = [
+            ["基本面质量", "先看ROE、增长、毛利率、现金流和负债。", "单一指标较好不代表整体质量稳定。"],
+            ["估值与同行", "再看历史分位、同行位置和三情景价值。", "低估值可能来自基本面折价。"],
+            ["观察触发器", "最后看趋势、成交、资金和反证条件。", "价格区间不是交易指令。"],
+        ]
+
+    story.append(_guide_table(
+        ["阅读模块", "重点看什么", "容易误读的地方"],
+        reading_rows,
+        [3.2 * cm, 6.2 * cm, 6.6 * cm],
+    ))
+    story.append(Spacer(1, 0.35 * cm))
+
+    story.append(Paragraph("研究假设可能失效的情形", styles["h1"]))
+    story.append(Paragraph(
+        "以下内容用于提醒读者：当关键数据、市场结构或外部条件发生变化时，前文分析需要重新复核。它不是风险预测，而是帮助建立复盘习惯。",
+        styles["caption"],
+    ))
+    story.append(Spacer(1, 0.12 * cm))
+
+    if report_type == "comparison":
+        invalid_rows = [
+            ["可比性下降", "样本业务、指数暴露或市场结构差异扩大", "先重审为什么选择这些标的进行比较。"],
+            ["评分权重失真", "单一指标异常拉高或拉低综合结果", "拆开各维度观察，不只看总分。"],
+            ["数据口径不一致", "市场、币种、财报周期、费用或规模口径不同", "统一口径后再做横向解读。"],
+        ]
+    elif kind == "etf":
+        invalid_rows = [
+            ["指数暴露假设变化", "指数估值、行业权重或成分集中度明显变化", "重新确认它是否仍代表预期资产暴露。"],
+            ["产品质量走弱", "跟踪误差扩大、规模或份额持续萎缩、成交额下降", "复核跟踪质量、流动性和清盘风险。"],
+            ["场内价格偏离", "折溢价显著扩大、盘中成交深度不足", "结合IOPV、成交额和申赎机制判断偏离是否短期。"],
+        ]
+    elif kind == "hk":
+        invalid_rows = [
+            ["流动性折价扩大", "成交额下降、换手不足、南向资金连续转弱", "复核估值折价是否来自流动性和风险偏好。"],
+            ["汇率或监管假设变化", "人民币/港元波动、监管政策边际变化", "区分业务基本面变化和外部估值扰动。"],
+            ["股东回报不及预期", "回购减少、派息政策变化、自由现金流承压", "复核分红和回购对估值支撑的可持续性。"],
+        ]
+    else:
+        invalid_rows = [
+            ["盈利假设被削弱", "收入或利润增速放缓、现金流跟不上利润、费用率抬升", "回到财报和经营现金流重新验证质量。"],
+            ["估值锚失效", "行业估值中枢下移、利率或风险偏好变化、同行预期下修", "不要只看历史分位，重算相对同行和情景空间。"],
+            ["行业或政策反转", "需求、价格、库存、监管或竞争格局明显变化", "把行业动态和公司财报交叉验证。"],
+        ]
+
+    story.append(_guide_table(
+        ["失效情形", "可观察信号", "复核方式"],
+        invalid_rows,
+        [4.1 * cm, 6.0 * cm, 5.9 * cm],
+    ))
+    story.append(PageBreak())
+
+
 def _default_cover_questions(kind):
     if kind == "etf":
         return ["指数估值与配置价值", "跟踪质量与流动性", "费率、溢价与再平衡风险"]

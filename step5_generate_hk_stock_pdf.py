@@ -33,6 +33,7 @@ from hk_analyst_model import build_hk_research_view, render_hk_research_brief
 from pdf_design import (
     CN_FONT as SHARED_CN_FONT,
     add_cover,
+    add_report_reading_guide,
     build_styles,
     callout_box,
     draw_report_footer,
@@ -642,6 +643,8 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
             ["主要风险", "港股流动性、人民币/港元汇率、国际资金流动、监管边际变化和信息披露差异。"],
         ],
     )
+
+    add_report_reading_guide(story, kind="hk")
 
     # ── 一、公司概况 ──
     story.append(Paragraph("一、公司概况", st["h1"]))

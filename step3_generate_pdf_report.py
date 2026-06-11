@@ -33,6 +33,7 @@ from etf_analyst_model import build_etf_research_view, render_etf_research_brief
 from pdf_design import (
     CN_FONT as SHARED_CN_FONT,
     add_cover,
+    add_report_reading_guide,
     build_styles,
     callout_box,
     draw_report_footer,
@@ -510,6 +511,8 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
             ["主要风险", "指数系统性下跌、跟踪偏差扩大、流动性下降及高溢价下的价格容错风险。"],
         ],
     )
+
+    add_report_reading_guide(story, kind="etf")
 
     # ── 一、投资摘要 ──
     story.append(Paragraph("一、投资摘要", st["h1"]))
