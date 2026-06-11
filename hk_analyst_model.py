@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Deterministic Hong Kong stock analyst model.
 
-The model is intentionally conservative. It produces a reproducible trading
-plan from available report data before any LLM wording is added.
+The model is intentionally conservative. It produces reproducible scenario
+bands from available report data before any LLM wording is added.
 """
 
 from __future__ import annotations
@@ -183,32 +183,32 @@ def build_hk_research_view(summary: dict) -> dict:
         position = "当前缺少港股日线价格，暂不生成价格区间；先以估值、南向资金、股息和财务质量判断配置价值。"
     elif score >= 5:
         rating = "积极关注"
-        position = "可分批配置，首仓不宜过重，并观察南向资金和成交额确认。"
+        position = "估值和质量证据相对积极，但仍需观察南向资金和成交额确认。"
     elif score >= 2:
-        rating = "谨慎增持"
-        position = "适合在回调至买入区时分批介入，避免追高。"
+        rating = "审慎关注"
+        position = "等待估值、南向资金或业绩至少一个维度继续验证。"
     elif score >= -1:
         rating = "观望"
-        position = "等待估值、南向资金或业绩至少一个维度改善后再提高仓位。"
+        position = "当前证据偏中性，需等待估值、资金或业绩信号改善。"
     else:
-        rating = "回避"
-        position = "暂不建议主动配置，优先等待基本面和流动性信号修复。"
+        rating = "风险优先"
+        position = "负向证据较多，优先等待基本面和流动性信号修复。"
 
     risk_level = "高" if score <= -2 or (debt_ratio and debt_ratio > 75) else "中" if score < 3 else "低"
     if not positives:
         positives.append("暂未形成足够强的正向证据")
     if not risks:
-        risks.append("港股受汇率、海外流动性和风险偏好影响，需控制仓位")
+        risks.append("港股受汇率、海外流动性和风险偏好影响，需提高情景复核频率")
     risks.append("人民币/港元汇率波动会影响内地投资者实际收益")
 
     if score >= 5:
         rating = "积极关注"
     elif score >= 2:
-        rating = "谨慎增持"
+        rating = "审慎关注"
     elif score >= -1:
         rating = "观望"
     else:
-        rating = "回避"
+        rating = "风险优先"
 
     return {
         "rating": rating,
@@ -242,7 +242,7 @@ def render_hk_research_brief(view: dict) -> str:
     watch = view.get("watch_zone")
     take = view.get("take_profit_zone")
     lines = [
-        f"- 评级：{view.get('rating')}（风险等级：{view.get('risk_level')}；综合得分：{view.get('score')}）",
+        f"- 研究状态：{view.get('rating')}（风险等级：{view.get('risk_level')}；综合得分：{view.get('score')}）",
     ]
     if view.get("cur_price") is not None:
         lines.append(
@@ -251,14 +251,14 @@ def render_hk_research_brief(view: dict) -> str:
     else:
         lines.append("- 当前缺少港股日线价格，暂不生成价格区间。")
     if buy:
-        lines.append(f"- 分批买入区：{buy[0]}-{buy[1]} HKD")
+        lines.append(f"- 估值安全边际观察区：{buy[0]}-{buy[1]} HKD")
     if watch:
-        lines.append(f"- 观察区：{watch[0]}-{watch[1]} HKD")
+        lines.append(f"- 中性观察区：{watch[0]}-{watch[1]} HKD")
     if take:
-        lines.append(f"- 分批止盈区：{take[0]}-{take[1]} HKD")
+        lines.append(f"- 高估值复核区：{take[0]}-{take[1]} HKD")
     if view.get("stop_loss") is not None:
-        lines.append(f"- 复盘止损位：{view.get('stop_loss')} HKD")
-    lines.append(f"- 操作计划：{view.get('position_plan')}")
+        lines.append(f"- 风险复核线：{view.get('stop_loss')} HKD")
+    lines.append(f"- 情景观察：{view.get('position_plan')}")
     lines.append("核心正向证据：")
     lines.extend([f"  - {x}" for x in view.get("positives", [])])
     lines.append("主要风险与反证条件：")

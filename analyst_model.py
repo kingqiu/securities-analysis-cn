@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Analyst-grade scoring and trading-plan helpers.
+Analyst-grade scoring and scenario-review helpers.
 
-The LLM should explain conclusions, not invent the core recommendation.
+The LLM should explain conclusions, not invent the core research view.
 This module turns already-fetched quantitative fields into a structured,
 auditable research view that can be rendered in PDF reports or sent to an LLM.
 """
@@ -38,16 +38,16 @@ def _score_band(name: str, score: int, evidence: str) -> dict:
 
 def _rating(total_score: int, base_upside, risk_reward):
     if total_score >= 11 and (base_upside or 0) >= 25 and (risk_reward or 0) >= 1.5:
-        return "强烈买入"
+        return "高关注"
     if total_score >= 8 and (base_upside or 0) >= 15:
-        return "买入"
+        return "积极观察"
     if total_score >= 5:
-        return "谨慎买入"
+        return "审慎关注"
     if total_score >= 2:
-        return "持有"
+        return "中性观察"
     if total_score >= -1:
-        return "观望"
-    return "回避"
+        return "等待验证"
+    return "风险优先"
 
 
 def _risk_level(total_score: int, bear_downside, pledge_ratio, debt_ratio):
@@ -289,46 +289,46 @@ def build_stock_research_view(summary_data: dict) -> dict:
 
     if buy_zone and cur_price:
         if cur_price <= buy_zone[1]:
-            action = "价格进入安全边际区，可考虑分批建仓，单次仓位不宜过重。"
-            position_plan = "首仓30%-40%，若基本面验证且仍在买入区可逐步加至60%-70%。"
+            action = "价格进入估值安全边际观察区，风险补偿有所改善，但仍需基本面证据验证。"
+            position_plan = "观察重点放在业绩兑现、现金流和成交确认，不输出操作比例。"
         elif watch_zone and cur_price <= watch_zone[1]:
-            action = "价格处于观察区，适合等待回调或基本面催化确认后再加仓。"
-            position_plan = "以观察或小仓位为主，等待回到买入区或业绩催化确认。"
+            action = "价格处于中性观察区，重点跟踪估值、业绩和行业证据是否继续验证。"
+            position_plan = "暂以证据跟踪为主，不将该区间解释为交易动作。"
         elif take_profit_zone and cur_price >= take_profit_zone[0]:
-            action = "价格接近或进入目标区，应以持有复盘和分批止盈为主。"
-            position_plan = "不宜追高加仓，可按目标区间分批降低仓位。"
+            action = "价格接近高估值复核区，需要重新检查乐观预期是否已充分反映。"
+            position_plan = "关注盈利上修、估值扩张和资金面是否仍有证据支持。"
         else:
-            action = "当前位置缺少足够安全边际，不建议追高。"
-            position_plan = "维持观察或轻仓，等待风险收益比改善。"
+            action = "当前位置安全边际不突出，应重点复核风险收益比和反证条件。"
+            position_plan = "仅作为研究观察状态，不给出操作安排。"
     else:
-        action = "关键价格数据不足，建议先以基本面跟踪和小仓位观察为主。"
-        position_plan = "关键价格区间缺失，不建议制定明确仓位上限。"
+        action = "关键价格数据不足，先以基本面、估值和行业证据跟踪为主。"
+        position_plan = "关键价格区间缺失，不生成操作比例或交易动作。"
 
     trading_rules = []
     if cur_price and support_20d and support_60d:
         main_support = max(support_20d, support_60d)
-        trading_rules.append(f"支撑观察：近20/60日支撑约{support_20d:.2f}/{support_60d:.2f}元，若回踩支撑并缩量企稳，可作为低吸观察点。")
+        trading_rules.append(f"支撑观察：近20/60日支撑约{support_20d:.2f}/{support_60d:.2f}元，若回踩支撑并缩量企稳，可作为趋势修复观察点。")
         if cur_price < main_support:
-            trading_rules.append("价格已跌破主要支撑，买入计划应暂停，先等待重新站回支撑区。")
+            trading_rules.append("价格已跌破主要支撑，需要复核趋势假设是否被削弱。")
     if resistance_20d and resistance_60d:
-        trading_rules.append(f"阻力观察：近20/60日压力约{resistance_20d:.2f}/{resistance_60d:.2f}元，放量突破后才提高追随仓位。")
+        trading_rules.append(f"阻力观察：近20/60日压力约{resistance_20d:.2f}/{resistance_60d:.2f}元，放量突破可提高趋势确认度。")
     if volume_ratio is not None:
         if volume_ratio >= 1.5:
             trading_rules.append(f"成交确认：最新成交量约为20日均量{volume_ratio:.2f}倍，若价格同步突破阻力，趋势确认度提高。")
         elif volume_ratio <= 0.7:
-            trading_rules.append(f"成交确认：最新成交量仅为20日均量{volume_ratio:.2f}倍，反弹若无量能配合，追高需谨慎。")
+            trading_rules.append(f"成交确认：最新成交量仅为20日均量{volume_ratio:.2f}倍，反弹若无量能配合，趋势可靠性偏弱。")
     if volatility_60d is not None:
         if volatility_60d >= 35:
-            trading_rules.append(f"波动约束：近60日年化波动率约{volatility_60d:.1f}%，单次建仓不宜超过计划仓位的25%。")
+            trading_rules.append(f"波动约束：近60日年化波动率约{volatility_60d:.1f}%，情景判断需要预留更宽容错。")
         else:
-            trading_rules.append(f"波动约束：近60日年化波动率约{volatility_60d:.1f}%，可按分批节奏执行。")
+            trading_rules.append(f"波动约束：近60日年化波动率约{volatility_60d:.1f}%，价格波动对情景判断的干扰相对可控。")
     if stop_loss is not None:
-        trading_rules.append(f"止损复盘：有效跌破{stop_loss:.2f}元后，不机械补仓，先复核业绩、估值和行业假设。")
+        trading_rules.append(f"风险复核：有效跌破{stop_loss:.2f}元后，先复核业绩、估值和行业假设是否失效。")
 
     position_ladder = [
-        "稳健型：只在买入区下沿或支撑企稳时建仓，单票仓位建议不超过计划权益仓的30%-40%。",
-        "平衡型：买入区内分2-3笔建仓，突破阻力且基本面未变坏时再加至60%-70%。",
-        "进取型：允许小仓位提前试错，但必须以止损位和量能确认作为加减仓纪律。",
+        "稳健型：重点等待估值、业绩和趋势三类证据同时改善。",
+        "平衡型：允许分阶段观察，但每次判断都应对应明确证据。",
+        "进取型：更关注趋势和催化，但需要设置反证条件和复核频率。",
     ]
 
     positives = []
@@ -346,7 +346,7 @@ def build_stock_research_view(summary_data: dict) -> dict:
         watchpoints.append("高估值能否被业绩增长消化")
     watchpoints.extend([
         "行业景气度、政策变化和竞争格局是否发生反转",
-        "股价跌破交易计划止损位后是否需要重新评估投资假设",
+        "价格跌破风险复核线后是否需要重新评估研究假设",
     ])
 
     return {
@@ -392,7 +392,7 @@ def build_stock_research_view(summary_data: dict) -> dict:
 def render_stock_research_brief(view: dict) -> str:
     """Render the structured research view as compact markdown."""
     if not view:
-        return "专业投研模型：关键数据不足，无法形成结构化交易计划。"
+        return "专业投研模型：关键数据不足，无法形成结构化情景观察。"
 
     def zone_text(zone):
         if not zone:
@@ -401,13 +401,13 @@ def render_stock_research_brief(view: dict) -> str:
 
     lines = [
         "### 专业投研模型结论",
-        f"- 评级：{view.get('rating', 'N/A')}（周期：{view.get('rating_period', 'N/A')}；风险等级：{view.get('risk_level', 'N/A')}）",
+        f"- 研究状态：{view.get('rating', 'N/A')}（周期：{view.get('rating_period', 'N/A')}；风险等级：{view.get('risk_level', 'N/A')}）",
         f"- 综合得分：{view.get('total_score', 'N/A')}（估值{view.get('valuation_score', 0)} / 质量{view.get('quality_score', 0)} / 成长{view.get('growth_score', 0)} / 资金技术{view.get('market_score', 0)} / 风险{view.get('risk_score', 0)}）",
         f"- 当前价格：{_fmt(view.get('cur_price'), '元', 2)}；谨慎/中性/乐观价值：{_fmt(view.get('price_bear'), '元', 2)} / {_fmt(view.get('price_base'), '元', 2)} / {_fmt(view.get('price_bull'), '元', 2)}",
-        f"- 安全边际买入区：{zone_text(view.get('buy_zone'))}；观察区：{zone_text(view.get('watch_zone'))}；分批止盈区：{zone_text(view.get('take_profit_zone'))}；复盘止损位：{_fmt(view.get('stop_loss'), '元', 2)}",
+        f"- 估值安全边际观察区：{zone_text(view.get('buy_zone'))}；中性观察区：{zone_text(view.get('watch_zone'))}；高估值复核区：{zone_text(view.get('take_profit_zone'))}；风险复核线：{_fmt(view.get('stop_loss'), '元', 2)}",
         f"- 中性空间：{_fmt(view.get('base_upside'), '%')}；谨慎情景回撤：{_fmt(view.get('bear_downside'), '%')}；风险收益比：{view.get('risk_reward') if view.get('risk_reward') is not None else 'N/A'}",
-        f"- 操作策略：{view.get('action', 'N/A')}",
-        f"- 仓位计划：{view.get('position_plan', 'N/A')}",
+        f"- 情景观察：{view.get('action', 'N/A')}",
+        f"- 证据要求：{view.get('position_plan', 'N/A')}",
         "",
         "核心正向证据：",
     ]
@@ -417,9 +417,9 @@ def render_stock_research_brief(view: dict) -> str:
     lines.append("后续复盘触发器：")
     lines.extend([f"- {item}" for item in view.get("watchpoints", [])])
     if view.get("trading_rules"):
-        lines.append("买入/卖出纪律：")
+        lines.append("观察触发器：")
         lines.extend([f"- {item}" for item in view.get("trading_rules", [])])
     if view.get("position_ladder"):
-        lines.append("不同风险偏好的仓位纪律：")
+        lines.append("不同风险偏好的观察方式：")
         lines.extend([f"- {item}" for item in view.get("position_ladder", [])])
     return "\n".join(lines)

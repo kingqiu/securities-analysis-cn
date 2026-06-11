@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-步骤5：基于真实数据生成港股深度分析 PDF 报告（含 Minima AI 买卖建议）
+步骤5：基于真实数据生成港股深度分析 PDF 报告（含 Minima AI 研究解读）
 """
 
 import json
@@ -610,7 +610,7 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
     hk_view = build_hk_research_view(hk_summary)
     hk_brief = render_hk_research_brief(hk_view)
 
-    # AI 买卖建议：只作为模型结论后的解释补充
+    # AI 研究解读：只作为模型结论后的解释补充
     advice_text = get_investment_advice("hk_stock", hk_summary)
 
     doc = SimpleDocTemplate(
@@ -632,7 +632,7 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
         ],
         kind="hk",
         highlights=[
-            ["模型评级", str(hk_view.get("rating", "N/A")), f"综合分 {hk_view.get('score', 'N/A')}"],
+            ["研究状态", str(hk_view.get("rating", "N/A")), f"综合分 {hk_view.get('score', 'N/A')}"],
             ["当前股价", f"{val.get('cur_price', 'N/A')} HKD", val.get("price_source", "Tushare日线")],
             ["南向资金", f"{sb_analysis.get('latest_ratio', 'N/A')}%", sb_analysis.get("trend", "未知")],
         ],
@@ -692,31 +692,31 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
         ],
     ], kind="hk")
 
-    # ── 二、投资建议与交易计划 ──
-    story.append(Paragraph("二、投资建议与港股交易计划", st["h1"]))
+    # ── 二、情景区间与观察触发器 ──
+    story.append(Paragraph("二、情景区间与观察触发器", st["h1"]))
     story.append(callout_box(
-        "以下结论由港股投研模型先生成，重点纳入南向资金、流动性、股息、汇率和趋势风险；仅供研究参考，不构成投资依据。",
+        "本节仅把港股投研模型结果整理为估值情景、风险复核线和观察触发器，重点纳入南向资金、流动性、股息、汇率和趋势风险；不构成任何买卖建议。",
         kind="hk"
     ))
     story.append(Spacer(1, 0.2*cm))
-    plan_rows = [["区间/触发器", "价格", "港股操作含义"]]
+    plan_rows = [["情景/触发器", "参考区间", "研究观察含义"]]
     if hk_view.get("buy_zone"):
         z = hk_view["buy_zone"]
-        plan_rows.append(["分批买入区", f"{z[0]}-{z[1]} HKD", "回调进入安全边际区，结合成交额和南向资金分批买入"])
+        plan_rows.append(["估值安全边际观察区", f"{z[0]}-{z[1]} HKD", "用于观察风险补偿是否改善，需结合成交额和南向资金验证"])
     if hk_view.get("watch_zone"):
         z = hk_view["watch_zone"]
-        plan_rows.append(["观察区", f"{z[0]}-{z[1]} HKD", "等待业绩、南向资金或行业催化进一步确认"])
+        plan_rows.append(["中性观察区", f"{z[0]}-{z[1]} HKD", "关注业绩、南向资金或行业催化是否进一步确认"])
     if hk_view.get("take_profit_zone"):
         z = hk_view["take_profit_zone"]
-        plan_rows.append(["分批止盈区", f"{z[0]}-{z[1]} HKD", "降低收益预期，分批兑现或复盘持有理由"])
+        plan_rows.append(["高估值复核区", f"{z[0]}-{z[1]} HKD", "复核估值是否已充分反映乐观预期"])
     if hk_view.get("stop_loss") is not None:
-        plan_rows.append(["复盘止损位", f"{hk_view['stop_loss']} HKD", "跌破后复核业绩、流动性和汇率假设"])
+        plan_rows.append(["风险复核线", f"{hk_view['stop_loss']} HKD", "若触及需复核业绩、流动性和汇率假设"])
     if len(plan_rows) > 1:
         story.append(_tbl(plan_rows, col_widths=[3.5*cm, 4*cm, 8.5*cm]))
         story.append(Spacer(1, 0.2*cm))
     story.extend(md_to_story(hk_brief, st["body"], table_builder=_tbl))
     story.append(Spacer(1, 0.2*cm))
-    story.append(Paragraph("AI 解读", st["h2"]))
+    story.append(Paragraph("模型文字解读", st["h2"]))
     story.extend(md_to_story(advice_text, st["body"], table_builder=_tbl))
     story.append(Spacer(1, 0.3*cm))
 

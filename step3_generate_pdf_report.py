@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-步骤3：基于真实数据生成 ETF 深度分析 PDF 报告（含 Minima AI 买卖建议）
+步骤3：基于真实数据生成 ETF 深度分析 PDF 报告（含 Minima AI 研究解读）
 """
 
 import json
@@ -500,14 +500,14 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         ],
         kind="etf",
         highlights=[
-            ["配置评级", str(etf_view.get("allocation_rating", "N/A")), f"配置分 {etf_view.get('allocation_score', 'N/A')}"],
-            ["交易评级", str(etf_view.get("trading_rating", "N/A")), f"交易分 {etf_view.get('trading_score', 'N/A')}"],
+            ["配置研究状态", str(etf_view.get("allocation_rating", "N/A")), f"配置分 {etf_view.get('allocation_score', 'N/A')}"],
+            ["场内观察状态", str(etf_view.get("trading_rating", "N/A")), f"观察分 {etf_view.get('trading_score', 'N/A')}"],
             ["综合费率", f"{total_fee}%/年", f"规模 {aum_bn}亿元"],
         ],
         notes=[
             ["核心结论", f"综合费率{total_fee}%/年、规模{aum_bn}亿元；跟踪误差{etf_summary.get('tracking_error')}%，配置价值取决于指数估值与流动性。"],
             ["关注变量", "指数估值、跟踪误差、溢价折价、规模流动性、费率和份额变化。"],
-            ["主要风险", "指数系统性下跌、跟踪偏差扩大、流动性下降及高溢价买入风险。"],
+            ["主要风险", "指数系统性下跌、跟踪偏差扩大、流动性下降及高溢价下的价格容错风险。"],
         ],
     )
 
@@ -549,7 +549,7 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
             "折溢价是否影响交易体验",
             f"当前溢价 {etf_summary.get('premium')}%；历史分位 {etf_summary.get('premium_pct')}%",
             "中等",
-            "折溢价提示场内价格与净值偏离，尤其影响短期买入体验。",
+            "折溢价提示场内价格与净值偏离，尤其影响短期成交体验。",
             "盘中IOPV、成交深度、申赎机制",
         ],
         [
@@ -561,18 +561,17 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         ],
     ], kind="etf")
 
-    # ── 二、配置与交易计划 ──
-    story.append(Paragraph("二、ETF配置与交易计划", st["h1"]))
-    story.append(callout_box("以下结论由 ETF 配置模型先生成，重点关注指数估值、跟踪质量、规模流动性、费率和溢价折价；仅供研究参考。", kind="etf"))
+    # ── 二、情景区间与观察触发器 ──
+    story.append(Paragraph("二、情景区间与观察触发器", st["h1"]))
+    story.append(callout_box("本节仅把 ETF 配置模型结果整理为配置情景、风险复核项和观察触发器，重点关注指数估值、跟踪质量、规模流动性、费率和溢价折价；不构成任何投资建议。", kind="etf"))
     story.append(Spacer(1, 0.2*cm))
     plan_rows = [
-        ["事项", "模型结论"],
-        ["配置评级", f"{etf_view.get('allocation_rating')}（配置分{etf_view.get('allocation_score')}）"],
-        ["交易评级", f"{etf_view.get('trading_rating')}（交易分{etf_view.get('trading_score')}）"],
-        ["场内实时状态", f"价格{etf_view.get('current_price', 'N/A')}；涨跌{etf_view.get('change_pct', 'N/A')}%；换手{etf_view.get('turnover_rate', 'N/A')}%"],
-        ["定投计划", etf_view.get("dca_plan", "")],
-        ["加仓条件", etf_view.get("add_condition", "")],
-        ["止盈/再平衡", etf_view.get("rebalance_condition", "")],
+        ["观察事项", "模型读数/触发器"],
+        ["配置研究状态", f"{etf_view.get('allocation_rating')}（配置分{etf_view.get('allocation_score')}）"],
+        ["场内观察状态", f"价格{etf_view.get('current_price', 'N/A')}；涨跌{etf_view.get('change_pct', 'N/A')}%；换手{etf_view.get('turnover_rate', 'N/A')}%"],
+        ["定投适配观察", etf_view.get("dca_plan", "")],
+        ["正向证据增强条件", etf_view.get("add_condition", "")],
+        ["高估值/再平衡复核", etf_view.get("rebalance_condition", "")],
     ]
     story.append(_tbl(plan_rows, col_widths=[3.5*cm, 12.5*cm]))
     story.append(Spacer(1, 0.2*cm))
@@ -580,11 +579,11 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     pro_rows = [
         ["专业维度", "当前读数", "解读"],
         ["跟踪误差", f"{etf_summary.get('tracking_error')}% / 日均偏差{etf_summary.get('tracking_bias')}%", "越低说明跟踪指数越稳定，持续偏差需复核现金拖累、费用和复制误差"],
-        ["溢价/折价", f"{etf_summary.get('premium')}%（分位{etf_summary.get('premium_pct')}%）", "高溢价不追买，折价需结合流动性和申赎机制判断"],
+        ["溢价/折价", f"{etf_summary.get('premium')}%（分位{etf_summary.get('premium_pct')}%）", "高溢价说明场内价格容错较低，折价需结合流动性和申赎机制判断"],
         ["份额变化", f"20日{etf_summary.get('net_flow_20d')}万份；60日{etf_summary.get('net_flow_60d')}万份", "份额扩张代表资金配置热度改善，持续赎回需警惕流动性下降"],
         ["成分集中度", f"Top10 {etf_summary.get('top10_weight')}%；Top20 {etf_summary.get('top20_weight')}%", "集中度越高，龙头股或单一行业波动对ETF影响越大"],
         ["行业权重", etf_summary.get("industry_weight_status"), "后续可接入成分股行业映射后输出行业暴露矩阵"],
-        ["策略适配", f"定投{etf_view.get('strategy_fit', {}).get('定投')}；波段{etf_view.get('strategy_fit', {}).get('波段')}；资产配置{etf_view.get('strategy_fit', {}).get('资产配置')}", "不同投资目的对应不同买入纪律和仓位上限"],
+        ["策略适配", f"定投{etf_view.get('strategy_fit', {}).get('定投')}；波段{etf_view.get('strategy_fit', {}).get('波段')}；资产配置{etf_view.get('strategy_fit', {}).get('资产配置')}", "不同研究目的对应不同观察频率和反证条件"],
     ]
     story.append(Paragraph("ETF专业诊断", st["h2"]))
     story.append(_tbl(pro_rows, col_widths=[3*cm, 5*cm, 8*cm]))
@@ -592,7 +591,7 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
 
     story.extend(md_to_story(etf_brief, st["body"], table_builder=_tbl))
     story.append(Spacer(1, 0.2*cm))
-    story.append(Paragraph("AI 解读", st["h2"]))
+    story.append(Paragraph("模型文字解读", st["h2"]))
     story.extend(md_to_story(advice_text, st["body"], table_builder=_tbl))
     story.append(Spacer(1, 0.3*cm))
 

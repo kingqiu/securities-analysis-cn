@@ -578,15 +578,15 @@ class TavilySearchProvider(SearchProvider):
         if "库存" in text or "动销" in text:
             return "影响收入确认质量和渠道健康度，是短期景气度核心变量"
         if "监管" in text or "政策" in text:
-            return "改变行业风险溢价，买点需等待政策边际方向更清晰"
+            return "改变行业风险溢价，需等待政策边际方向更清晰后再复核研究假设"
         if "ETF" in text or "基金份额" in text or "ETF规模" in text or "折溢价" in text:
             return "反映资金申赎和配置热度，影响ETF流动性和短期折溢价"
         if "寻底" in text or "筑底" in text:
-            return "说明行业仍在修复阶段，买点更依赖价格企稳和需求验证"
+            return "说明行业仍在修复阶段，正向验证更依赖价格企稳和需求改善"
         if "提价" in text:
             return "若渠道接受度良好，有利于利润率和盈利预期"
         if tone == "风险":
-            return "可能压制估值或推迟买入时点，需要等待数据验证"
+            return "可能压制估值或推迟正向验证，需要等待数据确认"
         if tone == "正面":
             return "有利于改善风险偏好，但仍需结合估值和成交确认"
         return "信息偏背景，需要和财务、价格、资金面交叉验证"
@@ -750,6 +750,9 @@ class TavilySearchProvider(SearchProvider):
         text = re.sub(r"资料来源[:：]?.*?(?=。|；|，|$)", "", text)
         text = re.sub(r"市场走势.*?(?=。|；|，|$)", "", text)
         text = re.sub(r"相关研究报告.*?(?=。|；|，|$)", "", text)
+        text = re.sub(r"(?:强烈)?(?:推荐|买入|增持|优于大市|跑赢行业)[/／](?:维持|上调|下调)", "", text)
+        text = re.sub(r"维持[“”\"']?(?:强烈推荐|推荐|买入|增持|优于大市|跑赢行业)[“”\"']?(?:评级)?", "", text)
+        text = re.sub(r"(?:给予|首次覆盖)[“”\"']?(?:强烈推荐|推荐|买入|增持|优于大市|跑赢行业)[“”\"']?(?:评级)?", "", text)
         text = re.sub(r"S\d{9,}", "", text)
         text = re.sub(r"^[0-9.%+() -]{6,}", "", text).strip()
         text = re.sub(r"^\[?\s*PDF\s*\]?[ 　：:|-]*", "", text, flags=re.I).strip()

@@ -7,6 +7,8 @@ test_apis.py
 # Python缓存
 *.pyc
 __pycache__/
+.pycache/
+.pycache_tmp/
 .matplotlib-cache/
 
 # 临时数据文件

@@ -4,7 +4,7 @@
 
 三大可替换组件：
 1. DataProvider  - 数据源（行情、财务、股东等）
-2. LLMProvider   - AI大模型（生成投资建议）
+2. LLMProvider   - AI大模型（生成研究解读）
 3. SearchProvider - 新闻搜索/研究（获取公司近期事件）
 """
 

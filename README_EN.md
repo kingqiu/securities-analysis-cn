@@ -1,168 +1,167 @@
 # securities-analysis-cn
 
-AI Agent Skill: Automated Deep Analysis Report Generator for Chinese Securities (A-shares, Hong Kong Stocks, ETFs).
+AI Agent Skill for Chinese securities research-review PDF reports covering A-shares, Hong Kong stocks, ETFs, and multi-security comparisons.
 
-## Overview
+The project fetches data, builds deterministic research models, summarizes source-backed context, and generates PDF reports. Reports are for research review and learning. They do not provide direct buy/sell advice, return promises, or trading instructions.
 
-Input any security **name or code**, and the system automatically: fetches data → AI analysis → generates PDF report.
+## Supported Assets
 
-Supports three markets:
-- **A-shares**: Shanghai/Shenzhen Stock Exchange (e.g., 贵州茅台, 比亚迪)
-- **Hong Kong**: HKEX (e.g., 腾讯控股, 泡泡玛特)
-- **ETF**: On-exchange ETF funds (e.g., 沪深300ETF, 中证500ETF)
+- **A-shares**: Shanghai/Shenzhen stocks, e.g. 贵州茅台, 比亚迪, 600519.
+- **Hong Kong stocks**: HKEX stocks, e.g. 腾讯控股, 00700.HK.
+- **ETFs / index funds**: exchange-listed ETFs, e.g. 沪深300ETF, 510300.
+- **Comparison reports**: compare up to `MAX_COMPARE_COUNT` securities.
 
 ## Installation
 
 ```bash
+git clone https://github.com/kingqiu/securities-analysis-cn.git
+cd securities-analysis-cn
 pip install -r requirements.txt
 python3 scripts/check_env.py
 ```
 
 ## Configuration
 
-Copy `.env.example` to `.env` and fill in your API keys:
+Copy `.env.example` to `.env` and fill in real keys:
 
 ```bash
 cp .env.example .env
-# Edit .env, add your TUSHARE_API_TOKEN and MINIMA_API_KEY
 ```
 
-> If no AI API Key is provided, reports will still generate with rule-based quantitative advice.
+Core variables:
 
-## Analyst Model
+- `TUSHARE_API_TOKEN`: structured market, financial, valuation, fund, and holding data.
+- `TUSHARE_API_URL`: Tushare-compatible gateway URL.
+- `LLM_PROVIDER`: `minimax` or `openai`, used for research commentary.
+- `SEARCH_PROVIDER`: default `auto`; Tavily first for latest company news and industry dynamics.
+- `TAVILY_API_KEY`: recommended for source-backed web research.
 
-A-share recommendations are no longer delegated directly to the LLM. `analyst_model.py` first builds a structured research view from valuation, quality, growth, funds/technical, and risk signals:
+If no LLM key is configured, reports still generate where possible and fall back to deterministic research text. The system does not invent missing structured market or financial data.
 
-- rating with a 6-12 month horizon
-- bear/base/bull fair value range
-- safety-margin buy zone, watch zone, take-profit zone, and review stop
-- position plan for staged entry, observation, or staged exit
-- risk/reward, positive evidence, major risks, and rebuttal conditions
-
-The LLM should explain this model output, not override ratings, target prices, or trading zones.
-
-Peer comparison is also handled by `peer_model.py`, which identifies market-cap leaders, quality benchmarks, and valuation anchors to judge whether the target's discount is an opportunity or a fundamental discount.
-
-Hong Kong stock reports use `hk_analyst_model.py`, adding southbound holdings, liquidity, dividend yield, FX risk, and Hong Kong market-specific trading constraints. If HK daily price data is unavailable, the model does not invent price zones.
-
-ETF reports use `etf_analyst_model.py`. They do not use stock-style buy/sell calls; instead they provide allocation rating, trading rating, DCA plan, add conditions, and rebalance/take-profit rules based on index valuation, tracking error, fund size, fees, and premium/discount.
-
-### Free Market Data Fallbacks
-
-The configured Tushare-compatible API remains the source of truth for financials, holdings, valuation, and fund/index data. Free sources only supplement trading fields:
-
-- A-shares: realtime price, change, turnover, amount, and related quote fields; if the Eastmoney full-market endpoint fails, fall back to a lightweight Tencent single-stock quote.
-- Hong Kong stocks: AkShare realtime quotes for current price; AkShare then yfinance HK daily bars when `hk_daily` is unavailable due to permission or rate limits.
-- ETFs: efinance/AkShare realtime ETF quote fields; AkShare ETF daily bars when fund daily bars are unavailable.
-
-Set `ENABLE_FREE_MARKET_DATA=0` to disable this fallback. Free-source failures do not stop report generation.
-
-### Switch AI Model
-
-Default: MiniMax. Switch to any OpenAI-compatible service (GPT, DeepSeek, Qwen, etc.):
-
-```env
-LLM_PROVIDER=openai
-OPENAI_API_KEY=your_key
-OPENAI_API_URL=https://api.openai.com      # or https://api.deepseek.com
-OPENAI_MODEL=gpt-4o                        # or deepseek-chat
-```
-
-### Switch Search Engine
-
-Default: AI knowledge summary. Switch to Tavily search or disable:
-
-```env
-SEARCH_PROVIDER=auto       # Tavily first, AI fallback
-TAVILY_API_KEY=your_key
-# SEARCH_PROVIDER=none     # disable internet research
-```
-
-## Usage
+## Quick Demo
 
 ```bash
-python3 run_analysis.py <name_or_code>
+python3 run_analysis.py 贵州茅台
+python3 run_analysis.py 腾讯控股
+python3 run_analysis.py 510300
+
+python3 run_analysis.py 贵州茅台 五粮液
+python3 run_analysis.py 510300 510500
 ```
 
-Examples:
-```bash
-python3 run_analysis.py 贵州茅台       # A-share, by name
-python3 run_analysis.py 600519         # A-share, by code
-python3 run_analysis.py 腾讯控股       # HK stock, by name
-python3 run_analysis.py 00700.HK       # HK stock, by code
-python3 run_analysis.py 沪深300ETF     # ETF, by name
-python3 run_analysis.py 510300         # ETF, by code
-```
+Output files:
 
-Output: PDF file in current directory, named `{name}_{type}_report_{date}.pdf`
+- Single security: `{name}_{type}_report_{date}.pdf`
+- Comparison: `{name1}_vs_{name2}_comparison_report_{date}.pdf`
 
-## Report Contents (Enhanced)
+## Report Philosophy
 
-### A-share Report (16 Sections)
-1. Company Overview → 2. AI Investment Advice → 3. Price & Valuation → 4. Earnings Analysis → 5. Financial Health (Cash Flow, Balance Sheet) → 6. Industry Comparable Valuation → 7. Three-Scenario Analysis → 8. Revenue Breakdown (by Product/Region) → 9. Capital Flow Analysis (Institutional Flow/Margin Trading/Shareholder Count/Block Trades/Pledges) → 10. Dividend History → 11. Earnings Forecast → 12. Concept Themes → 13. Shareholder Structure → 14. Company Research & Industry Dynamics (AI Internet Research) → 15. Macro Environment → 16. Audit & Compliance
+The reports avoid direct trading language. They use:
 
-### HK Stock Report (10 Sections)
-1. Company Overview → 2. AI Investment Advice → 3. Price Chart → 4. Earnings Analysis → 5. Financial Health → 6. Cash Flow Quality → 7. Southbound Capital Analysis → 8. Key Financial Indicator Trends & Dividends → 9. Company Research & Industry Dynamics → 10. Macro Environment
+- **Research hypothesis and evidence map**
+- **Scenario bands and observation triggers**
+- **Risk review lines**
+- **Model research commentary**
+- **Relative evidence ranking for comparisons**
 
-### Data Dimensions (A-share: 21 API Calls)
-Basic info, daily quotes, valuation metrics, income statement, balance sheet, cash flow statement, financial indicators, top 10 shareholders, industry benchmark index, industry peer valuation, revenue composition, dividend history, earnings forecast, shareholder count, capital flow, margin trading, block trades, concept themes, share pledges, audit opinions, CCTV news
+The LLM explains deterministic model outputs and retrieved sources. It should not create a buy/sell call or override structured model values.
 
-## Plugin Architecture (Provider Pattern)
+## A-share Reports
 
-Three core components are independently swappable via `.env` configuration:
+`analyst_model.py` builds a deterministic research view before LLM wording:
+
+- bear/base/bull value scenarios
+- valuation safety-margin observation zone, neutral observation zone, high-valuation review zone, and risk review line
+- score breakdown across valuation, quality, growth, funds/technical, and risk
+- support/resistance, moving-average state, volatility, volume confirmation, and rebuttal conditions
+- positive evidence, major risks, and follow-up observation triggers
+
+## Hong Kong Stock Reports
+
+`hk_analyst_model.py` adds Hong Kong-specific dimensions:
+
+- southbound capital holdings and trend
+- HK liquidity discount and turnover activity
+- HKD/CNY FX impact
+- dividend and buyback clues
+- ADR / US listing mapping notes
+- regulatory sensitivity and business segment breakdown for internet platforms
+
+Missing structured data is shown as a data gap rather than converted into a conclusion.
+
+## ETF Reports
+
+`etf_analyst_model.py` treats ETFs as index exposure and allocation research tools:
+
+- index valuation percentile and exposure
+- tracking error and daily tracking bias
+- total fee, fund size, amount, turnover
+- premium/discount and historical percentile
+- share changes, scale trend, and concentration
+- core allocation, satellite allocation, periodic observation, and tactical observation frameworks
+
+## Comparison Reports
+
+Comparison reports use the same visual system as single-security reports. They focus on:
+
+- whether the compared securities are truly comparable
+- valuation, growth, profitability, financial health, shareholder return, liquidity, and tracking quality
+- relative evidence ranking, not trading conclusions
+
+## Search And News
+
+Default `SEARCH_PROVIDER=auto`:
+
+1. Use Tavily first for latest company news, industry dynamics, analyst views, and risk events.
+2. Fall back to LLM summarization only when Tavily is unavailable.
+3. Filter low-quality titles, disclaimer pages, and broker rating-action words.
+
+## Data Permission Notes
+
+- **A-shares**: daily bars, valuation, income statement, balance sheet, cash flow, financial indicators, fund flow, shareholder, and peer data.
+- **HK stocks**: basic info, financial indicators, daily bars, southbound holdings; ADR spread and buyback details are notes or data gaps unless a structured source is added.
+- **ETFs**: NAV, fund daily bars, index daily bars, index valuation, fund share, fees, and index weights; industry weights require future constituent-industry mapping.
+- **Free fallbacks**: AkShare, efinance, and yfinance supplement realtime quotes or daily gaps only; fundamentals and valuation remain tied to the configured Tushare-compatible source.
+
+## Provider Architecture
 
 | Component | Env Variable | Options | Purpose |
-|-----------|-------------|---------|--------|
-| Data Source | `DATA_PROVIDER` | `tushare` (default) | Market/financial/shareholder data |
-| AI Model | `LLM_PROVIDER` | `minimax` (default), `openai` | Investment advice generation |
-| Search | `SEARCH_PROVIDER` | `auto` (default), `tavily`, `ai_summary`, `none` | Company news and industry dynamics |
+|-----------|--------------|---------|---------|
+| Data | `DATA_PROVIDER` | `tushare` | market, financial, shareholder, fund data |
+| LLM | `LLM_PROVIDER` | `minimax`, `openai` | research commentary |
+| Search | `SEARCH_PROVIDER` | `auto`, `tavily`, `ai_summary`, `none` | company news and industry dynamics |
 
-To add a new provider: inherit from base class in `providers/base.py` → implement interface → register in `providers/__init__.py`.
+To add a provider, inherit from `providers/base.py`, implement the interface, and register it in `providers/__init__.py`.
 
 ## Project Structure
 
-```
+```text
 securities-analysis-cn/
-├── SKILL.md                        # Skill definition (agent entry)
-├── run_analysis.py                 # Unified entry script
-├── config.py                       # Configuration (Provider selection + API keys)
-├── providers/                      # Plugin adapters
-│   ├── base.py                     # Three abstract base classes
-│   ├── __init__.py                 # Factory functions
-│   ├── data_tushare.py             # Data: Tushare API
-│   ├── llm_minimax.py              # LLM: MiniMax-M2.7
-│   ├── llm_openai.py               # LLM: OpenAI compatible (GPT/DeepSeek/Qwen)
-│   ├── search_ai.py                # Search: AI knowledge summary
-│   └── search_tavily.py            # Search: Tavily API
-├── identify_code_type.py           # Code/name parsing & type identification
-├── ai_analysis.py                  # AI investment advice (via LLMProvider)
-├── web_research.py                 # Internet research (via SearchProvider)
-├── step1_fetch_real_data.py        # ETF data fetching
-├── step1_fetch_stock_data.py       # A-share data fetching (21 APIs)
-├── step1_fetch_hk_stock_data.py    # HK stock data fetching (9 APIs)
-├── step3_generate_pdf_report.py    # ETF PDF report generation
-├── step4_generate_stock_pdf.py     # A-share PDF report generation (16 sections)
-├── step5_generate_hk_stock_pdf.py  # HK stock PDF report generation (10 sections)
-├── .env.example                    # Environment variable template (all options documented)
+├── SKILL.md                         # Skill entry instructions
+├── run_analysis.py                  # Unified CLI
+├── config.py                        # Provider and environment config
+├── ai_analysis.py                   # LLM prompts and fallback research text
+├── analyst_model.py                 # A-share deterministic research model
+├── hk_analyst_model.py              # HK deterministic research model
+├── etf_analyst_model.py             # ETF deterministic research model
+├── peer_model.py                    # Peer leader and valuation-anchor model
+├── pdf_design.py                    # Shared PDF visual system
+├── providers/                       # Data, LLM, and search adapters
+├── step3_generate_pdf_report.py      # ETF PDF
+├── step4_generate_stock_pdf.py       # A-share PDF
+├── step5_generate_hk_stock_pdf.py    # HK PDF
+├── step6_generate_comparison_pdf.py  # Comparison PDF
+├── .env.example                     # Environment template
 └── .gitignore
 ```
 
-## Data Sources
+## Repository Hygiene
 
-- **Financial Data**: Tushare API (A-share 21 APIs / HK 9 APIs / ETF), swappable
-- **Free Market Fallbacks**: AkShare / efinance / yfinance for realtime quotes and HK/ETF daily gaps
-- **AI Advice**: MiniMax-M2.7 (default), switchable to OpenAI/DeepSeek/Qwen
-- **Internet Research**: AI knowledge summary (default), switchable to Tavily
-- **Macro News**: CCTV News API (央视新闻联播)
+Never commit `.env`, API keys, tokens, temp JSON files, generated PDFs, preview images, or local caches. `.gitignore` excludes them by default.
 
-## Compatibility
+## Disclaimer
 
-This skill is compatible with:
-- **Claude Code** (Anthropic)
-- **OpenClaw**
-- **Hermes Agent**
-
-Skill entry: `SKILL.md` (YAML frontmatter + Markdown instructions)
+This project is for public-data organization, research review, and learning. Outputs may be affected by data gaps, API permissions, delayed quotes, search quality, and model interpretation. Reports do not constitute investment advice, return promises, or trading basis.
 
 ## License
 

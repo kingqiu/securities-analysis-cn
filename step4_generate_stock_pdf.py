@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-步骤4：基于真实数据生成股票深度分析 PDF 报告（含 Minima AI 买卖建议）
+步骤4：基于真实数据生成股票深度分析 PDF 报告（含 Minima AI 研究解读）
 """
 
 import json
 import os
+import re
 import tempfile
 from datetime import datetime
 
@@ -124,6 +125,15 @@ def _load(json_file):
         d["free_market_data"] = raw["free_market_data"]
 
     return d
+
+
+def _sanitize_research_text(text):
+    """Remove broker rating action words from quoted web snippets."""
+    value = str(text or "")
+    value = re.sub(r"(?:强烈)?(?:推荐|买入|增持|优于大市|跑赢行业)[/／](?:维持|上调|下调)", "", value)
+    value = re.sub(r"维持[“”\"']?(?:强烈推荐|推荐|买入|增持|优于大市|跑赢行业)[“”\"']?(?:评级)?", "", value)
+    value = re.sub(r"(?:给予|首次覆盖)[“”\"']?(?:强烈推荐|推荐|买入|增持|优于大市|跑赢行业)[“”\"']?(?:评级)?", "", value)
+    return value
 
 # ── 计算函数 ──────────────────────────────────────────────────────────────────
 
@@ -454,7 +464,7 @@ def _price_chart(daily_df, index_df, stock_name):
 
 
 def _trading_plan_chart(analyst_view, stock_name):
-    """交易计划价格带：买入区、观察区、止盈区、止损复盘位。"""
+    """Research scenario bands for valuation and risk review."""
     if not analyst_view:
         return None
 
@@ -488,12 +498,12 @@ def _trading_plan_chart(analyst_view, stock_name):
     ax.set_ylim(0, 1)
     ax.set_yticks([])
     ax.set_xlabel("价格（元）")
-    ax.set_title(f"{stock_name} 交易计划价格带", fontsize=12)
+    ax.set_title(f"{stock_name} 情景参考区间", fontsize=12)
 
     bands = [
-        ("安全边际买入区", buy_zone, "#d5f5e3", "#1e8449"),
-        ("观察区", watch_zone, "#fcf3cf", "#b7950b"),
-        ("分批止盈区", take_profit_zone, "#fadbd8", "#922b21"),
+        ("估值安全边际观察区", buy_zone, "#d5f5e3", "#1e8449"),
+        ("中性观察区", watch_zone, "#fcf3cf", "#b7950b"),
+        ("高估值复核区", take_profit_zone, "#fadbd8", "#922b21"),
     ]
     y = 0.46
     h = 0.28
@@ -505,7 +515,7 @@ def _trading_plan_chart(analyst_view, stock_name):
         ax.text((start + end) / 2, y, label, ha="center", va="center", fontsize=9, color=edge)
 
     marker_specs = [
-        ("复盘止损", stop_loss, "#7b241c", 0.18),
+        ("风险复核线", stop_loss, "#7b241c", 0.18),
         ("当前价", cur, "#000000", 0.78),
         ("谨慎价值", bear, "#7f8c8d", 0.08),
         ("中性价值", base, "#8b1a1a", 0.90),
@@ -681,7 +691,7 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
             fc_max = fc.get("p_change_max", "")
             forecast_info = f"{fc_type}（变动幅度{fc_min}%~{fc_max}%）"
 
-    # 专业投研模型 + AI 买卖建议（增强版）
+    # 专业投研模型 + AI 研究解读（增强版）
     stock_summary = {
         "name": stock_name,
         "ts_code": d["ts_code"],
@@ -741,7 +751,7 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
         ],
         kind="stock",
         highlights=[
-            ["模型评级", str(analyst_view.get("rating", "N/A")), f"综合分 {analyst_view.get('score', 'N/A')}"],
+            ["研究状态", str(analyst_view.get("rating", "N/A")), f"综合分 {analyst_view.get('total_score', 'N/A')}"],
             ["当前股价", f"{stock_summary.get('cur_price', 'N/A')} 元", stock_summary.get("price_source", "Tushare日线/估值")],
             ["PE(TTM)", str(val.get("pe_ttm", "N/A")), f"历史分位 {val.get('pe_percentile', 'N/A')}%"],
         ],
@@ -802,35 +812,35 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
         ],
     ], kind="stock")
 
-    # ── 二、买卖建议（AI） ──
-    story.append(Paragraph("二、投资建议与交易计划", st["h1"]))
-    story.append(callout_box("以下结论由量化投研模型先生成，AI 仅负责解释与组织语言；仅供研究参考，不构成投资依据。", kind="stock"))
+    # ── 二、情景区间与观察触发器 ──
+    story.append(Paragraph("二、情景区间与观察触发器", st["h1"]))
+    story.append(callout_box("本节仅把模型测算结果整理为估值情景、风险复核线和后续观察触发器，用于研究复盘；不构成任何买卖建议。", kind="stock"))
     story.append(Spacer(1, 0.2*cm))
     plan_chart = _trading_plan_chart(analyst_view, stock_name)
     if plan_chart:
         story.append(plan_chart)
-        story.append(Paragraph("图：交易计划价格带。价格区间用于复盘和仓位管理，不代表确定性买卖点。", st["caption"]))
+        story.append(Paragraph("图：情景参考区间。价格区间仅用于观察估值与风险状态，不代表任何交易判断。", st["caption"]))
         story.append(Spacer(1, 0.2*cm))
 
-    plan_rows = [["区间/触发器", "价格", "建议动作"]]
+    plan_rows = [["情景/触发器", "参考区间", "研究观察含义"]]
     if analyst_view.get("buy_zone"):
         z = analyst_view["buy_zone"]
-        plan_rows.append(["安全边际买入区", f"{z[0]:.2f}-{z[1]:.2f}元", "可考虑分批建仓，控制单次仓位"])
+        plan_rows.append(["估值安全边际观察区", f"{z[0]:.2f}-{z[1]:.2f}元", "用于观察风险补偿是否改善，不对应交易动作"])
     if analyst_view.get("watch_zone"):
         z = analyst_view["watch_zone"]
-        plan_rows.append(["观察区", f"{z[0]:.2f}-{z[1]:.2f}元", "等待回调或基本面催化确认"])
+        plan_rows.append(["中性观察区", f"{z[0]:.2f}-{z[1]:.2f}元", "关注估值、业绩和行业证据是否继续验证"])
     if analyst_view.get("take_profit_zone"):
         z = analyst_view["take_profit_zone"]
-        plan_rows.append(["分批止盈区", f"{z[0]:.2f}-{z[1]:.2f}元", "降低预期收益，分批兑现或复盘持有理由"])
+        plan_rows.append(["高估值复核区", f"{z[0]:.2f}-{z[1]:.2f}元", "复核估值是否已充分反映乐观预期"])
     if analyst_view.get("stop_loss") is not None:
-        plan_rows.append(["复盘止损位", f"{analyst_view['stop_loss']:.2f}元", "跌破后重新检查业绩、估值和趋势假设"])
+        plan_rows.append(["风险复核线", f"{analyst_view['stop_loss']:.2f}元", "若触及需重新检查业绩、估值和趋势假设"])
     if len(plan_rows) > 1:
         story.append(_tbl(plan_rows, col_widths=[4*cm, 4*cm, 8*cm]))
         story.append(Spacer(1, 0.2*cm))
 
     story.extend(md_to_story(analyst_brief, st["body"], table_builder=_tbl))
     story.append(Spacer(1, 0.2*cm))
-    story.append(Paragraph("AI 解读", st["h2"]))
+    story.append(Paragraph("模型文字解读", st["h2"]))
     story.append(Spacer(1, 0.2*cm))
     story.extend(md_to_story(advice_text, st["body"], table_builder=_tbl))
     story.append(Spacer(1, 0.3*cm))
@@ -1204,6 +1214,7 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
             content = sections.get(key, "")
             if content:
                 story.append(Paragraph(title, st["h2"]))
+                content = _sanitize_research_text(content)
                 story.extend(md_to_story(content, st["body"], table_builder=_tbl))
                 story.append(Spacer(1, 0.2*cm))
 

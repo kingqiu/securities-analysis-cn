@@ -11,6 +11,7 @@ import tempfile
 from datetime import datetime
 
 import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -31,6 +32,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 
 from ai_analysis import get_comparison_advice
 from config import md_to_rl, md_to_story
+from pdf_design import add_cover, draw_report_footer
 
 # ── 字体注册 ──────────────────────────────────────────────────────────────────
 
@@ -125,6 +127,69 @@ def _safe_float(val, default=None):
         return default
 
 
+def _cover_kind(compare_type):
+    if compare_type == "etf":
+        return "etf"
+    if compare_type == "hk_stock":
+        return "hk"
+    return "stock"
+
+
+def _sanitize_guidance_text(text):
+    value = str(text or "")
+    replacements = {
+        "AI 对比建议": "模型对比解读",
+        "AI对比建议": "模型对比解读",
+        "AI分析建议": "模型研究解读",
+        "投资建议": "研究参考",
+        "买卖建议": "研究解读",
+        "交易建议": "研究观察",
+        "如果只能买一只": "若只看当前可见证据",
+        "我推荐": "证据更支持关注",
+        "推荐": "证据较强",
+        "不推荐": "证据偏弱",
+        "买入": "纳入观察",
+        "卖出": "风险复核",
+        "建仓": "建立观察",
+        "加仓": "提高关注度",
+        "减仓": "降低关注度",
+        "止盈": "高估值复核",
+        "止损": "风险复核",
+        "仓位": "关注比例",
+        "最佳选择": "证据相对更充分的样本",
+    }
+    for src, dst in replacements.items():
+        value = value.replace(src, dst)
+    return value
+
+
+def _comparison_cover_notes(compare_type, summaries, names):
+    if compare_type == "etf":
+        fees = [s.get("total_fee") for s in summaries if s.get("total_fee") not in (None, "N/A", "")]
+        fee_text = f"费率样本 {min(fees)}%-{max(fees)}%/年" if fees else "费率数据需结合正文核验"
+        return [
+            ["核心结论", f"本报告比较 {len(names)} 只ETF的收益、跟踪质量、费率、规模和流动性，重点看产品差异而非给出配置结论。"],
+            ["关注变量", f"指数估值、跟踪误差、折溢价、成交额、规模变化和{fee_text}。"],
+            ["主要风险", "历史收益不代表未来，指数系统性波动、跟踪偏差和流动性变化都可能改变比较结果。"],
+        ]
+    industries = sorted(set(str(s.get("industry", "未知")) for s in summaries))
+    return [
+        ["核心结论", f"本报告比较 {len(names)} 个标的的估值、成长、盈利质量、财务健康和资金/流动性特征。"],
+        ["关注变量", f"行业口径：{'、'.join(industries[:4])}；需区分同业可比和跨行业不可比。"],
+        ["主要风险", "评分只反映当前可见数据的相对位置，不能替代公告核验、行业研究和个人风险承受能力判断。"],
+    ]
+
+
+def _comparison_cover_questions(compare_type):
+    if compare_type == "etf":
+        return ["指数暴露是否可比", "产品成本与跟踪质量", "流动性和折溢价风险"]
+    if compare_type == "hk_stock":
+        return ["估值与流动性折价", "南向资金和股东回报", "汇率与监管敏感度"]
+    if compare_type == "mixed":
+        return ["哪些指标可以横向比较", "哪些指标需要分市场理解", "风险暴露是否一致"]
+    return ["估值是否可比", "成长和盈利质量", "风险暴露与反证条件"]
+
+
 # ── 图表生成 ─────────────────────────────────────────────────────────────────
 
 def _save_chart(fig, prefix="cmp"):
@@ -198,7 +263,7 @@ def _extract_daily_series(data, code_type):
 
 
 def _chart_price_overlay(all_results, names):
-    """归一化股价走势叠加图"""
+    """归一化走势叠加图"""
     fig, ax = plt.subplots(figsize=(10, 5))
 
     for i, r in enumerate(all_results):
@@ -223,7 +288,7 @@ def _chart_price_overlay(all_results, names):
                 linewidth=1.5, label=names[i], alpha=0.85)
 
     ax.axhline(y=0, color="grey", linestyle="--", linewidth=0.5, alpha=0.5)
-    ax.set_title("股价走势叠加（归一化涨跌幅%）", fontsize=13)
+    ax.set_title("走势叠加（归一化涨跌幅%）", fontsize=13)
     ax.set_ylabel("涨跌幅(%)")
     ax.set_xlabel("交易日")
     ax.legend(fontsize=9)
@@ -288,6 +353,26 @@ def _get_rows(data, key):
 def _get_realtime_quote(data):
     quote = data.get("realtime_quote")
     return quote if isinstance(quote, dict) else {}
+
+
+def _display_name(r):
+    data = r.get("data", {})
+    for key in ("basic", "fund_basic", "hk_basic", "basic_info"):
+        rows = _get_rows(data, key)
+        if rows:
+            name = rows[0].get("name") or rows[0].get("fullname")
+            if name:
+                return str(name)
+    return str(r.get("name") or r.get("ts_code") or "未知标的")
+
+
+def _display_code(r):
+    data = r.get("data", {})
+    for key in ("basic", "fund_basic", "hk_basic", "basic_info"):
+        rows = _get_rows(data, key)
+        if rows and rows[0].get("ts_code"):
+            return str(rows[0].get("ts_code"))
+    return str(r.get("ts_code") or "N/A")
 
 
 def _extract_stock_summary(r):
@@ -359,8 +444,8 @@ def _extract_stock_summary(r):
     cur_price = quote.get("price") if quote.get("price") is not None else latest_db.get("close", "N/A")
 
     return {
-        "name": r["name"],
-        "ts_code": r["ts_code"],
+        "name": _display_name(r),
+        "ts_code": _display_code(r),
         "industry": meta.get("industry") or basic.get("industry", "未知"),
         "market_cap": market_cap,
         "list_date": meta.get("list_date") or basic.get("list_date", "N/A"),
@@ -422,8 +507,8 @@ def _extract_hk_stock_summary(r):
             pass
 
     return {
-        "name": r["name"],
-        "ts_code": r["ts_code"],
+        "name": _display_name(r),
+        "ts_code": _display_code(r),
         "industry": meta.get("industry", basic.get("industry", "未知")),
         "market_cap": "N/A",
         "list_date": basic.get("list_date", "N/A"),
@@ -503,8 +588,8 @@ def _extract_etf_summary(r):
             pass
 
     return {
-        "name": r["name"],
-        "ts_code": r["ts_code"],
+        "name": _display_name(r),
+        "ts_code": _display_code(r),
         "fund_type": basic.get("fund_type", "ETF"),
         "benchmark": basic.get("benchmark", "N/A"),
         "found_date": basic.get("found_date") or basic.get("list_date", "N/A"),
@@ -563,7 +648,6 @@ def create_comparison_pdf(all_results, compare_type, output_path):
     """
     st = _styles()
     story = []
-    names = [r["name"] for r in all_results]
     count = len(all_results)
     date_str = datetime.now().strftime("%Y年%m月%d日")
 
@@ -577,9 +661,9 @@ def create_comparison_pdf(all_results, compare_type, output_path):
             summaries.append(_extract_hk_stock_summary(r))
         else:
             summaries.append(_extract_stock_summary(r))
+    names = [s.get("name", _display_name(r)) for s, r in zip(summaries, all_results)]
 
     # ── 封面 ──
-    story.append(Spacer(1, 3 * cm))
     if compare_type == "etf":
         title_text = "ETF基金对比分析报告"
     elif compare_type == "stock":
@@ -593,15 +677,20 @@ def create_comparison_pdf(all_results, compare_type, output_path):
     else:
         title_text = "跨市场对比分析报告"
 
-    story.append(Paragraph(title_text, st["title"]))
-    story.append(Paragraph(" vs ".join(names), st["subtitle"]))
-    story.append(Paragraph(f"生成日期：{date_str}", st["subtitle"]))
-    story.append(Spacer(1, 1 * cm))
-    story.append(Paragraph(
-        '💡 本报告中，每个分析板块都包含「说人话」的解读，帮助没有金融背景的读者也能看懂。',
-        st["explain"]
-    ))
-    story.append(PageBreak())
+    cover_kind = _cover_kind(compare_type)
+    add_cover(
+        story,
+        title_text,
+        "多标的横向研究报告",
+        [
+            ["对比标的", f"{count} 个"],
+            ["报告日期", date_str],
+            ["标的范围", " / ".join(names)[:42]],
+        ],
+        kind=cover_kind,
+        notes=_comparison_cover_notes(compare_type, summaries, names),
+        questions=_comparison_cover_questions(compare_type),
+    )
 
     # ── 根据对比类型生成不同内容 ──
     if compare_type == "etf":
@@ -615,7 +704,7 @@ def create_comparison_pdf(all_results, compare_type, output_path):
         leftMargin=1.5 * cm, rightMargin=1.5 * cm,
         topMargin=1.5 * cm, bottomMargin=1.5 * cm,
     )
-    doc.build(story)
+    doc.build(story, onFirstPage=lambda c, d: draw_report_footer(c, d, cover_kind), onLaterPages=lambda c, d: draw_report_footer(c, d, cover_kind))
     print(f"  ✓ PDF 已生成：{output_path}")
 
 
@@ -654,15 +743,15 @@ def _build_stock_comparison(story, st, all_results, summaries, names, count, com
     story.append(Paragraph(explain, st["explain"]))
     story.append(Spacer(1, 0.5 * cm))
 
-    # ── 第2章：AI 对比建议 ──
-    story.append(Paragraph("二、AI 对比分析建议", st["h1"]))
+    # ── 第2章：模型对比解读 ──
+    story.append(Paragraph("二、模型对比研究解读", st["h1"]))
     story.append(Paragraph(
-        "💡 以下由AI基于所有数据生成，用通俗语言解释对比结论。",
+        "以下由模型基于当前可见数据整理为对比研究解读，重点帮助理解差异来源，不构成任何交易判断。",
         st["explain"]
     ))
     story.append(Spacer(1, 0.2 * cm))
 
-    ai_advice = get_comparison_advice(compare_type, summaries)
+    ai_advice = _sanitize_guidance_text(get_comparison_advice(compare_type, summaries))
     story.extend(md_to_story(ai_advice, st["body"], table_builder=_tbl))
     story.append(Spacer(1, 0.5 * cm))
 
@@ -677,8 +766,8 @@ def _build_stock_comparison(story, st, all_results, summaries, names, count, com
 
     # 说人话
     story.append(Paragraph(
-        '💡 这张图把所有股票的起点对齐到0%，看的是"如果同一天买入，到现在谁涨得多谁跌得多"。'
-        '线在上面的赚得多，线在下面的亏得多。',
+        '这张图把所有股票的起点对齐到0%，用于观察同一时间窗口下的相对强弱。'
+        '线在上方说明阶段表现更强，线在下方说明阶段表现更弱，但不代表后续走势判断。',
         st["explain"]
     ))
     story.append(Spacer(1, 0.5 * cm))
@@ -784,8 +873,8 @@ def _build_stock_comparison(story, st, all_results, summaries, names, count, com
     story.append(Spacer(1, 0.2 * cm))
 
     story.append(Paragraph(
-        '💡 股息率 = 买了这只股票一年能收到多少分红。股息率2%意味着「投入10万元，每年收到2000元现金分红」。'
-        '股息率高的公司通常比较成熟稳定，适合追求「躺赚」的投资者。',
+        '股息率 = 按当前价格估算的年度现金分红比例。股息率2%意味着名义上每10万元市值对应约2000元年度分红。'
+        '股息率高的公司通常更成熟，但仍需观察盈利稳定性、分红持续性和再投资空间。',
         st["explain"]
     ))
     story.append(Spacer(1, 0.5 * cm))
@@ -795,8 +884,8 @@ def _build_stock_comparison(story, st, all_results, summaries, names, count, com
     if has_stock:
         story.append(Paragraph("九、资金面信号（仅A股）", st["h1"]))
         story.append(Paragraph(
-            '💡 资金面反映的是「大资金在买还是在卖」。主力净流入 = 大机构（基金、保险）正在买入，是看好信号。'
-            '股东人数减少通常意味着筹码集中到大资金手中，也是好信号。'
+            '资金面反映的是不同资金在一段时间内的流入流出状态。主力净流入可作为风险偏好改善的观察线索，'
+            '股东人数减少可能意味着筹码集中度提升，但这些指标都需要和价格、成交额及基本面交叉验证。'
             '（注：港股标的不显示此数据）',
             st["explain"]
         ))
@@ -840,10 +929,10 @@ def _build_stock_comparison(story, st, all_results, summaries, names, count, com
     # 找出综合得分最高的
     best_idx = total_scores.index(max(total_scores))
     story.append(Paragraph(
-        f"💡 综合来看，{names[best_idx]}的综合得分最高（{total_scores[best_idx]}分）。"
+        f"综合来看，{names[best_idx]}在本报告的量化维度中得分最高（{total_scores[best_idx]}分），代表当前可见证据相对更充分。"
         f"评分权重：估值性价比25% + 成长性25% + 盈利质量20% + 财务健康15% + 分红回报15%。"
         f"★越多越好，综合得分满分500分。"
-        f"请注意：评分仅基于历史数据的量化分析，不构成投资建议。",
+        f"请注意：评分仅基于历史数据和已接入指标的相对比较，不构成投资建议。",
         st["explain"]
     ))
 
@@ -872,21 +961,21 @@ def _build_etf_comparison(story, st, all_results, summaries, names, count):
     story.append(_tbl(rows, col_widths=col_w))
     story.append(Spacer(1, 0.2 * cm))
     story.append(Paragraph(
-        '💡 ETF好比一张「通票」——买一只ETF就相当于同时买入了一篮子股票。'
+        'ETF可以理解为跟踪一篮子资产的工具，不同ETF对应不同指数暴露。'
         '不同ETF追踪不同的指数（比如沪深300=最大的300家公司、中证500=排名301-800的中型公司）。'
-        '规模越大的ETF通常越稳定，不容易被关掉。',
+        '规模越大的ETF通常流动性和存续稳定性更好。',
         st["explain"]
     ))
     story.append(Spacer(1, 0.5 * cm))
 
-    # ── 第2章：AI 对比建议 ──
-    story.append(Paragraph("二、AI 对比分析建议", st["h1"]))
+    # ── 第2章：模型对比解读 ──
+    story.append(Paragraph("二、模型对比研究解读", st["h1"]))
     story.append(Paragraph(
-        "💡 以下由AI基于所有数据生成，用通俗语言解释对比结论。",
+        "以下由模型基于当前可见数据整理为对比研究解读，重点帮助理解产品差异，不构成任何配置或交易判断。",
         st["explain"]
     ))
 
-    ai_advice = get_comparison_advice("etf", summaries)
+    ai_advice = _sanitize_guidance_text(get_comparison_advice("etf", summaries))
     story.extend(md_to_story(ai_advice, st["body"], table_builder=_tbl))
     story.append(Spacer(1, 0.5 * cm))
 
@@ -900,8 +989,8 @@ def _build_etf_comparison(story, st, all_results, summaries, names, count):
 
     story.append(Spacer(1, 0.2 * cm))
     story.append(Paragraph(
-        "💡 如果同一天在每只基金各投1万元，这张图显示到今天各变成了多少。"
-        "线在上面的赚得多，线在下面的亏得多。",
+        "这张图把各基金放在同一时间窗口里观察相对表现。"
+        "线在上方代表阶段表现更强，线在下方代表阶段表现更弱，但不代表未来表现。",
         st["explain"]
     ))
     story.append(Spacer(1, 0.5 * cm))
@@ -922,9 +1011,9 @@ def _build_etf_comparison(story, st, all_results, summaries, names, count):
 
     story.append(Spacer(1, 0.2 * cm))
     story.append(Paragraph(
-        '💡 收益率就是「这只基金帮你赚了（或亏了）百分之几」。'
-        '近1年收益率10%意味着「一年前投1万，现在变成1.1万」。'
-        '看长期（1年）比看短期（1月）更能判断基金的「真实实力」。',
+        '收益率用于观察基金在不同周期里的净值变化。'
+        '近1年收益率10%意味着过去一年净值大约上涨10%。'
+        '较长周期通常比单月表现更能反映产品与指数暴露的阶段特征。',
         st["explain"]
     ))
     story.append(Spacer(1, 0.5 * cm))
@@ -937,7 +1026,7 @@ def _build_etf_comparison(story, st, all_results, summaries, names, count):
     ))
     story.append(Paragraph(
         "波动率 = 价格上下波动的程度。高波动 = 坐过山车，低波动 = 坐高铁。\n"
-        "最大回撤 = 从最高点到最低点最多亏多少。-20%意味着「如果在最高点买入，最惨时亏两成」。\n"
+        "最大回撤 = 从阶段最高点到最低点的最大跌幅。-20%意味着历史区间内曾从高点回落约两成。\n"
         "夏普比率 = 每承受1份风险换来多少收益。大于1表示值得，小于0表示冒了险还亏钱。",
         st["body"]
     ))
@@ -954,7 +1043,7 @@ def _build_etf_comparison(story, st, all_results, summaries, names, count):
     story.append(Spacer(1, 0.2 * cm))
     story.append(Paragraph(
         '💡 ETF的本质是「复印机」——它的工作是精确复制指数的走势。跟踪误差就是「复印的清晰度」：\n'
-        '误差 <0.5% = 复印得很清楚（优秀）；0.5-1% = 有点模糊但还行；>1% = 复印质量差（不推荐）。'
+        '误差 <0.5% = 复印得很清楚（优秀）；0.5-1% = 有点模糊但还行；>1% = 复制偏差需要重点复核。'
         '误差越小说明基金管理人越尽职。',
         st["explain"]
     ))
@@ -973,7 +1062,7 @@ def _build_etf_comparison(story, st, all_results, summaries, names, count):
     story.append(Paragraph(
         '💡 费率就是基金公司每年从你的收益里扣掉的「服务费」。'
         '0.5%和0.15%看起来差别小，但投10万持有10年，差距能到3000-5000元。'
-        '记住：同样的东西，费率越低越好——就像两家超市卖同一款可乐，当然去便宜的那家买。',
+        '在指数暴露和跟踪质量相近时，费率越低通常越有成本优势。',
         st["explain"]
     ))
     story.append(Spacer(1, 0.5 * cm))
@@ -989,8 +1078,8 @@ def _build_etf_comparison(story, st, all_results, summaries, names, count):
     story.append(_tbl(liq_rows, col_widths=col_w))
     story.append(Spacer(1, 0.2 * cm))
     story.append(Paragraph(
-        "💡 流动性 = 你想卖的时候能不能马上卖出去。"
-        "规模大的ETF每天买卖的人多，想买能马上买到、想卖能马上卖出。"
+        "流动性 = 场内成交是否活跃、价格是否容易偏离净值。"
+        "规模和成交额较大的ETF通常成交体验更稳定。"
         "规模太小（<2亿元）的ETF有被清盘的风险（基金公司觉得不赚钱就关掉了，你的钱会按净值退回来但很被动）。",
         st["explain"]
     ))
@@ -999,7 +1088,7 @@ def _build_etf_comparison(story, st, all_results, summaries, names, count):
     # ── 第9章：持仓分析对比 ──
     story.append(Paragraph("九、持仓分析对比", st["h1"]))
     story.append(Paragraph(
-        '💡 虽然你买的是一只基金，但本质上是买了一篮子股票。这部分告诉你「篮子里都装了什么」。'
+        'ETF背后是一篮子成分证券，这部分用于观察指数暴露、行业结构和集中度。'
         '（持仓明细详见各基金单独报告）',
         st["explain"]
     ))
@@ -1031,9 +1120,9 @@ def _build_etf_comparison(story, st, all_results, summaries, names, count):
 
     best_idx = total_scores.index(max(total_scores))
     story.append(Paragraph(
-        f"💡 综合来看，{names[best_idx]}的综合得分最高（{total_scores[best_idx]}分）。"
+        f"综合来看，{names[best_idx]}在本报告的量化维度中得分最高（{total_scores[best_idx]}分），代表当前可见证据相对更充分。"
         f"评分权重：近1年收益30% + 费率成本25% + 跟踪精度25% + 规模流动性20%。"
         f"★越多越好，综合得分满分500分。"
-        f"请注意：评分仅基于历史数据的量化分析，不构成投资建议。",
+        f"请注意：评分仅基于历史数据和已接入指标的相对比较，不构成投资建议。",
         st["explain"]
     ))

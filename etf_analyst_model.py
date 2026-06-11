@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic ETF allocation and trading-plan model."""
+"""Deterministic ETF allocation and scenario-review model."""
 
 from __future__ import annotations
 
@@ -103,17 +103,17 @@ def build_etf_research_view(summary: dict) -> dict:
             notes.append(f"当前溢折率约{premium:.2f}%，场内价格与净值偏离较小")
         elif premium > 1:
             trading -= 1
-            risks.append(f"场内溢价约{premium:.2f}%，不适合追价买入")
+            risks.append(f"场内溢价约{premium:.2f}%，场内价格相对净值偏高，需关注溢价回落")
         elif premium < -1:
             notes.append(f"场内折价约{abs(premium):.2f}%，可关注折价收敛机会")
     if premium_pct is not None and premium_pct >= 85:
         trading -= 1
-        risks.append(f"溢折率处于近一年{premium_pct:.1f}%分位，场内买入需防溢价回落")
+        risks.append(f"溢折率处于近一年{premium_pct:.1f}%分位，需防范溢价回落影响持有体验")
 
     if change_pct is not None:
         if change_pct >= 3 and val_pct and val_pct >= 60:
             trading -= 1
-            risks.append(f"盘中涨幅约{change_pct:.2f}%，且估值不低，不宜追价")
+            risks.append(f"盘中涨幅约{change_pct:.2f}%，且估值不低，短期波动容错偏低")
         elif change_pct <= -2 and val_pct is not None and val_pct <= 40:
             notes.append(f"盘中回调约{abs(change_pct):.2f}%，若溢价不高可作为分批观察点")
 
@@ -155,7 +155,7 @@ def build_etf_research_view(summary: dict) -> dict:
         trading -= 1
         risks.append("近一年涨幅较大且估值不低，需防止阶段性回撤")
     if ret_3m is not None and ret_3m < -10 and val_pct and val_pct <= 40:
-        notes.append("短期回撤叠加估值偏低，适合定投而非一次性重仓")
+        notes.append("短期回撤叠加估值偏低，更适合用分阶段观察替代一次性判断")
 
     if allocation >= 5:
         allocation_rating = "适合核心配置"
@@ -167,13 +167,13 @@ def build_etf_research_view(summary: dict) -> dict:
         allocation_rating = "谨慎配置"
 
     if trading >= 3:
-        trading_rating = "可分批买入"
+        trading_rating = "积极观察"
     elif trading >= 1:
-        trading_rating = "等待回调低吸"
+        trading_rating = "等待信号"
     elif trading >= -1:
         trading_rating = "观望"
     else:
-        trading_rating = "暂缓买入"
+        trading_rating = "风险复核"
 
     if not notes:
         notes.append("当前数据未形成明显优势，建议结合指数估值和资金趋势继续观察")
@@ -205,9 +205,9 @@ def build_etf_research_view(summary: dict) -> dict:
         "top20_weight": top20_weight,
         "industry_weight_status": industry_weight_status,
         "strategy_fit": strategy_fit,
-        "dca_plan": "适合用定投/分批方式建仓，估值分位越低可提高单期投入；估值进入高分位后转为再平衡。",
-        "add_condition": "估值分位低于30%、溢价率接近0且份额不持续萎缩时，可考虑加仓。",
-        "rebalance_condition": "估值分位高于80%、短期涨幅过快或场内溢价超过1%时，考虑止盈或再平衡。",
+        "dca_plan": "可用定期观察框架跟踪估值分位、跟踪误差和规模份额，避免把单日价格当作结论。",
+        "add_condition": "估值分位低于30%、溢价率接近0且份额不持续萎缩时，说明配置性价比证据可能增强。",
+        "rebalance_condition": "估值分位高于80%、短期涨幅过快或场内溢价超过1%时，需要复核是否已充分反映乐观预期。",
         "notes": notes[:6],
         "risks": risks[:6],
     }
@@ -218,17 +218,17 @@ def render_etf_research_brief(view: dict) -> str:
         return "ETF配置模型数据不足。"
     lines = [
         f"- ETF类型：{view.get('etf_type')}",
-        f"- 配置评级：{view.get('allocation_rating')}（配置分{view.get('allocation_score')}）",
-        f"- 交易评级：{view.get('trading_rating')}（交易分{view.get('trading_score')}）",
+        f"- 配置研究状态：{view.get('allocation_rating')}（配置分{view.get('allocation_score')}）",
+        f"- 场内观察状态：{view.get('trading_rating')}（观察分{view.get('trading_score')}）",
     ]
     if view.get("current_price") is not None:
         lines.append(
             f"- 场内实时状态：价格{view.get('current_price')}，涨跌幅{view.get('change_pct')}%，换手率{view.get('turnover_rate')}%"
         )
     lines.extend([
-        f"- 定投计划：{view.get('dca_plan')}",
-        f"- 加仓条件：{view.get('add_condition')}",
-        f"- 止盈/再平衡：{view.get('rebalance_condition')}",
+        f"- 定期观察框架：{view.get('dca_plan')}",
+        f"- 正向触发器：{view.get('add_condition')}",
+        f"- 高估值复核：{view.get('rebalance_condition')}",
         f"- 策略适配：定投={view.get('strategy_fit', {}).get('定投')}；波段={view.get('strategy_fit', {}).get('波段')}；资产配置={view.get('strategy_fit', {}).get('资产配置')}",
         f"- 成分集中度：前十大{view.get('top10_weight', 'N/A')}%，前二十大{view.get('top20_weight', 'N/A')}%；行业权重状态：{view.get('industry_weight_status')}",
         "核心依据：",

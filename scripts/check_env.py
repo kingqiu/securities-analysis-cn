@@ -102,10 +102,10 @@ def check_env_file() -> bool:
 
     if llm_provider == "minimax":
         key = os.environ.get("MINIMA_API_KEY", "").strip()
-        _status(bool(key), "MINIMA_API_KEY", "optional; missing key falls back to rule-based advice")
+        _status(bool(key), "MINIMA_API_KEY", "optional; missing key falls back to rule-based research text")
     elif llm_provider == "openai":
         key = os.environ.get("OPENAI_API_KEY", "").strip()
-        _status(bool(key), "OPENAI_API_KEY", "optional; missing key falls back to rule-based advice")
+        _status(bool(key), "OPENAI_API_KEY", "optional; missing key falls back to rule-based research text")
     else:
         ok = False
         _status(False, "LLM_PROVIDER", "supported values: minimax, openai")

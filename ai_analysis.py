@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Minima AI 买卖建议模块
-调用 MiniMax-M2.7 模型，基于量化指标生成投资建议文字
+Minima AI research commentary module.
+调用 MiniMax-M2.7 模型，基于量化指标生成审慎的研究复盘文字。
 """
 
 from analyst_model import build_stock_research_view, render_stock_research_brief
@@ -9,9 +9,9 @@ from etf_analyst_model import build_etf_research_view, render_etf_research_brief
 from hk_analyst_model import build_hk_research_view, render_hk_research_brief
 from providers import get_llm_provider
 
-_ETF_PROMPT = """你是一位专业的基金分析师。请基于以下量化数据和已计算的 ETF 配置模型结论，对{name}（{ts_code}）给出简洁、审慎、可复盘的投资建议。
+_ETF_PROMPT = """你是一位专业的基金研究员。请基于以下量化数据和已计算的 ETF 配置模型结论，对{name}（{ts_code}）给出简洁、审慎、可复盘的研究解读。
 
-【ETF配置模型结论（必须遵守，不得擅自改评级、加仓条件或再平衡规则）】
+【ETF配置模型结论（必须遵守，不得擅自改研究状态或触发器）】
 {etf_view}
 
 数据摘要：
@@ -26,16 +26,16 @@ _ETF_PROMPT = """你是一位专业的基金分析师。请基于以下量化数
 - 场内实时状态：价格={current_price}，涨跌幅={change_pct}%，换手率={turnover_rate}%，成交额={amount}
 
 请给出：
-1. 配置结论与适合人群（解释模型评级，不要改成股票式“买入/卖出”）
-2. 定投/加仓/再平衡规则解释（强调是触发条件，不是确定性最佳点）
+1. 配置研究状态与适用观察场景（解释模型状态，不要改成股票式“买入/卖出”）
+2. 情景区间与观察触发器解释（强调是研究触发条件，不是确定性最佳点）
 3. 核心理由（3条，每条1-2句）
 4. 主要风险提示（至少2条）
 
-要求：语言简洁专业，总字数350字以内；不要编造数据；不要使用“稳赚”“最佳买点”“必须买入”等确定性表述。"""
+要求：语言简洁专业，总字数350字以内；不要编造数据；不要使用“买入、卖出、建仓、加仓、减仓、止盈、止损、仓位建议、稳赚、最佳买点、必须买入”等直接交易或确定性表述。"""
 
-_STOCK_PROMPT = """你是一位资深的卖方研究员。请基于以下量化数据和已计算的投研模型结论，对{name}（{ts_code}）给出专业、审慎、可复盘的投资建议。
+_STOCK_PROMPT = """你是一位资深的证券研究员。请基于以下量化数据和已计算的投研模型结论，对{name}（{ts_code}）给出专业、审慎、可复盘的研究解读。
 
-【投研模型结论（必须遵守，不得擅自改评级或价格区间）】
+【投研模型结论（必须遵守，不得擅自改研究状态或价格情景区间）】
 {analyst_view}
 
 【估值维度】
@@ -70,17 +70,17 @@ _STOCK_PROMPT = """你是一位资深的卖方研究员。请基于以下量化�
 {peer_context}
 
 请给出：
-1. 投资评级与适合人群（明确周期，避免承诺收益）
-2. 买入/观察/卖出区间解释（说明这是交易计划区间，不是确定性最佳点）
+1. 研究状态与适合观察的周期（明确周期，避免承诺收益）
+2. 情景区间解释（说明这是研究复盘区间，不是确定性最佳点）
 3. 核心逻辑（4条，每条1-2句，涵盖估值、质量、成长、资金技术）
 4. 主要风险与反证条件（至少2条，说明什么情况会推翻原判断）
-5. 建议操作策略（分批、仓位、复盘条件）
+5. 后续观察触发器（只描述需继续验证的证据和复盘条件）
 
-要求：语言专业凝练，总字数500字以内；不要编造数据；不要使用“稳赚”“最佳买点”等确定性表述。"""
+要求：语言专业凝练，总字数500字以内；不要编造数据；不要使用“买入、卖出、建仓、加仓、减仓、止盈、止损、仓位建议、稳赚、最佳买点、必须买入”等直接交易或确定性表述。"""
 
-_FALLBACK = "暂无AI分析建议（API调用失败）"
+_FALLBACK = "暂无AI研究解读（API调用失败）"
 
-_STOCK_COMPARISON_PROMPT = """你是一位经验丰富的投资顾问，正在向一位完全没有金融背景的朋友解释多只股票的对比分析结果。
+_STOCK_COMPARISON_PROMPT = """你是一位经验丰富的证券研究员，正在向一位完全没有金融背景的朋友解释多只股票的对比分析结果。
 
 {industry_context}
 
@@ -89,40 +89,42 @@ _STOCK_COMPARISON_PROMPT = """你是一位经验丰富的投资顾问，正在�
 {data_table}
 
 请给出：
-1. **综合排序**：如果只能买一只，你推荐哪只？从最推荐到最不推荐排序。
+1. **综合观察排序**：从研究证据更充分到证据更弱排序，说明排序依据。
 2. **各自优劣势**：每只股票用2-3句话说清核心优势和最大风险。
 3. **估值解读**：谁便宜谁贵？贵的是否有道理（比如增速更快）？
-4. **适合什么人**：每只股票适合什么类型的投资者（稳健型/成长型/激进型）？
+4. **适合什么观察框架**：每只股票更适合从稳健、成长、弹性、风险复核中的哪个角度继续观察？
 
 要求：
 - 每个专业术语第一次出现时，用括号加一句大白话解释
 - 多用比喻和生活化类比（如"开店""存银行""买手机"）
-- 结论要明确，不要模棱两可
-- 风险提示要具体，说清楚"最坏情况下可能亏多少"
+- 结论要清楚，但不要形成直接买卖建议
+- 不要使用“买入、卖出、建仓、加仓、减仓、止盈、止损、仓位、推荐、最佳选择、如果只能买”等直接交易或确定性表述
+- 风险提示要具体，说明哪些因素会削弱研究假设
 - 总字数400字以内"""
 
-_ETF_COMPARISON_PROMPT = """你是一位经验丰富的基金顾问，正在向一位完全没有金融背景的朋友解释多只ETF基金的对比分析结果。
+_ETF_COMPARISON_PROMPT = """你是一位经验丰富的基金研究员，正在向一位完全没有金融背景的朋友解释多只ETF基金的对比分析结果。
 
 以下是{count}只ETF的核心数据：
 
 {data_table}
 
 请给出：
-1. **该选哪个赛道**：这几只ETF分别追踪什么方向？哪个方向当前更有投资价值？
+1. **赛道观察顺序**：这几只ETF分别追踪什么方向？哪个方向当前研究证据更充分？
 2. **产品优劣对比**：费率、跟踪精度、规模、流动性谁更好？
 3. **收益与风险**：过去谁赚得多？谁波动小？谁"性价比"最高？
-4. **适合什么人**：每只ETF适合什么类型的投资者？
+4. **适合什么观察框架**：每只ETF更适合从核心配置、行业暴露、费率、跟踪质量、流动性中的哪个角度继续观察？
 
 要求：
 - 每个专业术语第一次出现时，用括号加一句大白话解释
 - 多用比喻（如"买套餐""复印机""坐过山车"）
 - 把ETF比作日常生活中的东西，让完全不懂金融的人也能明白
-- 结论要明确："如果让我选一个，我选XX，因为..."
+- 结论要清楚，但不要形成直接买卖建议
+- 不要使用“买入、卖出、建仓、加仓、减仓、止盈、止损、仓位、推荐、最佳选择、如果只能买”等直接交易或确定性表述
 - 总字数400字以内"""
 
-_HK_STOCK_PROMPT = """你是一位专业的港股分析师。请基于以下量化数据和已计算的港股投研模型结论，对{name}（{ts_code}）给出简洁、审慎、可复盘的投资建议。
+_HK_STOCK_PROMPT = """你是一位专业的港股研究员。请基于以下量化数据和已计算的港股投研模型结论，对{name}（{ts_code}）给出简洁、审慎、可复盘的研究解读。
 
-【港股投研模型结论（必须遵守，不得擅自改评级、价格区间或止损位）】
+【港股投研模型结论（必须遵守，不得擅自改研究状态、价格情景区间或风险复核线）】
 {hk_view}
 
 数据摘要：
@@ -137,12 +139,12 @@ _HK_STOCK_PROMPT = """你是一位专业的港股分析师。请基于以下量�
 - 当前价格：{cur_price} HKD，价格来源：{price_source}
 
 请给出：
-1. 投资评级与适合人群（解释模型评级，不要自行改评级）
-2. 买入/观察/止盈/止损区间解释（说明这是交易计划区间，不是确定性最佳点；若模型没有区间则说明价格数据不足）
+1. 研究状态与适合观察的周期（解释模型状态，不要自行改状态）
+2. 情景区间解释（说明这是研究复盘区间，不是确定性最佳点；若模型没有区间则说明价格数据不足）
 3. 核心理由（3条，每条1-2句）
 4. 主要风险与反证条件（至少2条，需提及港股特有风险如汇率、流动性、南向资金）
 
-要求：语言简洁专业，总字数400字以内；不要编造数据；不要使用“稳赚”“最佳买点”等确定性表述。"""
+要求：语言简洁专业，总字数400字以内；不要编造数据；不要使用“买入、卖出、建仓、加仓、减仓、止盈、止损、仓位建议、稳赚、最佳买点、必须买入”等直接交易或确定性表述。"""
 
 
 def _fmt_pct(value):
@@ -177,11 +179,11 @@ def _rule_based_etf_advice(summary_data: dict) -> str:
         score += 1
 
     if score >= 3:
-        rating = "买入"
+        rating = "积极观察"
     elif score >= 2:
-        rating = "持有"
+        rating = "中性观察"
     else:
-        rating = "观望"
+        rating = "等待验证"
 
     reasons = [
         f"近1月/3月/1年收益分别为{_fmt_pct(ret_1m)}、{_fmt_pct(ret_3m)}、{_fmt_pct(ret_1y)}，反映当前阶段表现。",
@@ -190,13 +192,13 @@ def _rule_based_etf_advice(summary_data: dict) -> str:
     ]
 
     return "\n".join([
-        "AI服务暂不可用，以下为基于量化指标的规则化建议：",
-        f"1. 投资评级：{rating}",
+        "AI服务暂不可用，以下为基于量化指标的规则化研究解读：",
+        f"1. 研究状态：{rating}",
         "2. 核心理由：",
         f"- {reasons[0]}",
         f"- {reasons[1]}",
         f"- {reasons[2]}",
-        "3. 风险提示：短期波动与风格轮动可能放大净值回撤，建议控制仓位并分批配置。",
+        "3. 风险提示：短期波动与风格轮动可能放大净值回撤，需要结合估值、跟踪误差和流动性持续复核。",
     ])
 
 
@@ -204,7 +206,7 @@ def _rule_based_stock_advice(summary_data: dict) -> str:
     view = build_stock_research_view(summary_data)
     if view:
         return "\n".join([
-            "AI服务暂不可用，以下为基于专业投研模型的规则化建议：",
+            "AI服务暂不可用，以下为基于专业投研模型的规则化研究解读：",
             render_stock_research_brief(view),
         ])
 
@@ -221,15 +223,15 @@ def _rule_based_stock_advice(summary_data: dict) -> str:
         score += 1
 
     if score >= 3:
-        rating = "买入"
+        rating = "积极观察"
     elif score >= 2:
-        rating = "持有"
+        rating = "中性观察"
     else:
-        rating = "观望"
+        rating = "等待验证"
 
     return "\n".join([
-        "AI服务暂不可用，以下为基于量化指标的规则化建议：",
-        f"1. 投资评级：{rating}",
+        "AI服务暂不可用，以下为基于量化指标的规则化研究解读：",
+        f"1. 研究状态：{rating}",
         "2. 核心理由：",
         f"- 当前PE(TTM)为{_fmt_pct(pe).replace('%', '') if pe is not None else 'N/A'}，估值处于可比区间内。",
         f"- ROE为{_fmt_pct(roe)}，反映公司盈利质量。",
@@ -252,20 +254,20 @@ def _rule_based_hk_stock_advice(summary_data: dict) -> str:
         score += 1
 
     if score >= 3:
-        rating = "买入"
+        rating = "积极观察"
     elif score >= 2:
-        rating = "持有"
+        rating = "中性观察"
     else:
-        rating = "观望"
+        rating = "等待验证"
 
     return "\n".join([
-        "AI服务暂不可用，以下为基于量化指标的规则化建议：",
-        f"1. 投资评级：{rating}",
+        "AI服务暂不可用，以下为基于量化指标的规则化研究解读：",
+        f"1. 研究状态：{rating}",
         "2. 核心理由：",
         f"- 当前PE(TTM)为{str(round(pe, 1)) if pe is not None else 'N/A'}，估值处于可比区间内。",
         f"- ROE(平均)为{_fmt_pct(roe)}，反映公司盈利质量。",
         f"- 资产负债率为{_fmt_pct(debt)}，可用于评估财务稳健性。",
-        "3. 风险提示：港股流动性风险、汇率波动及南向资金情绪变化均可能造成较大回撤，建议控制仓位。",
+        "3. 风险提示：港股流动性风险、汇率波动及南向资金情绪变化均可能造成较大回撤，需要提高复核频率。",
     ])
 
 
@@ -294,15 +296,15 @@ def _call_llm(prompt: str) -> str:
 
 def get_investment_advice(security_type: str, summary_data: dict) -> str:
     """
-    生成买卖建议文字。
+    生成研究解读文字。
 
     参数:
         security_type: "etf"、"stock" 或 "hk_stock"
         summary_data: 量化指标字典（见各模板字段）
     返回:
-        str - 包含评级+理由+风险的自然语言建议
+        str - 包含研究状态、理由和风险的自然语言解读
     """
-    print("  调用 Minima AI 生成买卖建议...")
+    print("  调用 Minima AI 生成研究解读...")
 
     if security_type == "etf":
         d = summary_data
@@ -396,7 +398,7 @@ def get_investment_advice(security_type: str, summary_data: dict) -> str:
 
 def get_comparison_advice(compare_type: str, summaries: list) -> str:
     """
-    生成多标的对比分析的 AI 建议。
+    生成多标的对比分析的 AI 研究解读。
 
     参数:
         compare_type: "stock" / "hk_stock" / "etf" / "mixed"
@@ -404,7 +406,7 @@ def get_comparison_advice(compare_type: str, summaries: list) -> str:
     返回:
         str - 通俗易懂的对比分析文字
     """
-    print("  调用 AI 生成对比分析建议...")
+    print("  调用 AI 生成对比研究解读...")
 
     count = len(summaries)
 
@@ -455,7 +457,7 @@ def get_comparison_advice(compare_type: str, summaries: list) -> str:
     if ai_text == _FALLBACK:
         # 降级：简单文本摘要
         names = [s.get("name", "?") for s in summaries]
-        return f"AI服务暂不可用。以下{count}只标的（{'、'.join(names)}）的详细数据请参考后续各章节图表。"
+        return f"模型服务暂不可用。以下{count}只标的（{'、'.join(names)}）的详细数据请参考后续各章节图表。"
     return ai_text
 
 

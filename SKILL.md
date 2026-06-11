@@ -1,15 +1,18 @@
 ---
 name: securities-analysis-cn
 description: >
-  Generate professional Chinese securities analysis reports for A-shares, Hong Kong stocks, and listed ETFs.
-  Use when the user asks to analyze a Chinese stock/ETF, compare multiple securities, assess buy/sell zones,
-  review valuation and fundamentals, or generate a PDF investment research report from a ticker or Chinese name
-  such as 600519, 贵州茅台, 00700.HK, 腾讯控股, 510300, or 沪深300ETF.
+  Generate Chinese securities research-review PDF reports for A-shares, Hong Kong stocks, listed ETFs,
+  and multi-security comparisons. Use when the user asks to analyze a Chinese security, compare
+  multiple securities, review valuation/fundamentals/liquidity/risk evidence, or produce a PDF
+  research report from a ticker or Chinese name such as 600519, 贵州茅台, 00700.HK, 腾讯控股, 510300,
+  or 沪深300ETF. The skill should not present direct buy/sell advice.
 ---
 
 # securities-analysis-cn
 
-Generate PDF research reports for A-shares, Hong Kong stocks, and listed ETFs.
+Generate PDF research reports for A-shares, Hong Kong stocks, listed ETFs, and multi-security comparisons.
+
+The report is a research-review artifact. It should help the user understand evidence, scenarios, risks, and follow-up observations. It must not be framed as direct investment advice, a buy/sell call, or a best entry/exit point.
 
 ## Quick Start
 
@@ -49,14 +52,16 @@ pip install -r requirements.txt
 Copy `.env.example` to `.env` and configure:
 
 - `TUSHARE_API_TOKEN`: required for market and financial data.
-- `LLM_PROVIDER`: `minimax` or `openai`; optional because advice falls back to rule-based analysis.
-- `SEARCH_PROVIDER`: `auto`, `tavily`, `ai_summary`, or `none`. Use `auto` by default; it searches Tavily first for latest company news and industry dynamics, then falls back to AI only when Tavily is missing or unavailable.
+- `TUSHARE_API_URL`: Tushare-compatible gateway URL.
+- `LLM_PROVIDER`: `minimax` or `openai`; optional because reports fall back to deterministic research text.
+- `SEARCH_PROVIDER`: `auto`, `tavily`, `ai_summary`, or `none`.
+- `TAVILY_API_KEY`: recommended for latest company news and industry dynamics.
 
 Run `python3 scripts/check_env.py` before the first report or when debugging setup.
 
 ## Minimum Demo
 
-After `.env` is configured, these three commands cover the main asset classes:
+After `.env` is configured:
 
 ```bash
 python3 run_analysis.py 贵州茅台
@@ -71,63 +76,95 @@ If a provider permission is missing, keep the report running when possible and m
 1. Resolve input name/code with `identify_code_type.resolve_input()`.
 2. Identify security type with `DataProvider.identify_security()`.
 3. Fetch market, financial, shareholder, fund-flow, and peer data.
-4. Supplement realtime market quotes with free AkShare/efinance fallbacks when enabled.
-5. For A-shares, build a deterministic analyst model before calling the LLM.
-6. Build peer-leader context for A-shares when industry peer data is available.
-7. Use Tavily first for latest news and industry dynamics; use the LLM only to summarize search results or explain the deterministic model and peer context.
-8. Generate the PDF with the matching report generator.
+4. Supplement realtime market quotes with free AkShare/efinance/yfinance fallbacks when enabled.
+5. Build deterministic research models before LLM wording.
+6. Use Tavily first for latest news and industry dynamics; use LLM fallback only when search is unavailable or for summarizing retrieved sources.
+7. Generate a PDF with the matching report generator.
 
-## Recommendation Rules
+## Wording And Compliance Rules
 
-For A-share reports, do not ask the LLM to invent a buy/sell call directly. Use `analyst_model.py` first. It produces:
+Do not ask the LLM to produce a direct buy/sell call.
 
-- rating and 6-12 month horizon
-- bear/base/bull fair value
-- safety-margin buy zone, watch zone, take-profit zone, and review stop
-- position plan for staged entry, observation, or profit-taking
+Use these terms:
+
+- `研究状态`
+- `情景区间`
+- `观察触发器`
+- `风险复核线`
+- `研究假设与证据地图`
+- `模型研究解读`
+- `相对证据排序`
+
+Avoid these terms in report conclusions:
+
+- `买入`
+- `卖出`
+- `建仓`
+- `加仓`
+- `减仓`
+- `止盈`
+- `止损`
+- `仓位建议`
+- `最佳买点`
+- `最佳卖点`
+- `必须买入`
+- `推荐买入`
+
+Disclaimers may say the report does not constitute investment advice.
+
+## Report Model Rules
+
+For A-share reports, use `analyst_model.py` first. It produces:
+
+- bear/base/bull value scenarios
+- valuation safety-margin observation zone, neutral observation zone, high-valuation review zone, and risk review line
 - score breakdown across valuation, quality, growth, funds/technical, and risk
-- positive evidence, major risks, and review triggers
+- positive evidence, major risks, rebuttal conditions, and observation triggers
 
-Use “trading plan” language. Avoid deterministic wording such as “best buy point”, “best sell point”, “guaranteed”, or “must buy”.
+For Hong Kong stock reports, use `hk_analyst_model.py` before LLM wording. Include southbound holdings, dividend yield, liquidity, FX risk, HK price-data availability, ADR mapping notes, buyback/dividend clues, and regulatory sensitivity. If HK daily prices are unavailable, do not create price scenario bands.
 
-For Hong Kong stock reports, use `hk_analyst_model.py` before LLM wording. Include southbound holdings, dividend yield, liquidity, FX risk, and HK price-data availability. If HK daily prices are unavailable, do not create buy/sell price zones.
+For ETF reports, use `etf_analyst_model.py`. Treat ETFs as index exposure and allocation research tools, not single-stock trades. Emphasize index valuation, tracking quality, fund size, fees, premium/discount, share changes, liquidity, concentration, and suitable observation framework.
 
-For ETF reports, use `etf_analyst_model.py`. Treat ETFs as allocation tools, not single-stock trades. Produce allocation rating, trading rating, DCA plan, add conditions, and rebalance/take-profit rules from index valuation, tracking quality, fund size, fees, premium/discount, and realtime liquidity fields when available.
+For peer comparison, explain the selection logic. Use industry peers to identify market-cap leaders, quality leaders, valuation anchors, and risk-exposure peers when data exists.
 
-For A-share trading plans, include support/resistance, moving-average state, volatility, volume confirmation, review stop, and risk-profile position sizing. Price zones are a plan for review, not a promise of best entry or exit.
-
-For peer comparison, explain the selection logic. Use industry peers to identify market-cap leaders, quality leaders, and valuation anchors; compare valuation, profitability, growth, ROE/cash-flow quality, and risk exposures when the data exists.
+For comparison reports, present relative evidence rankings and metric differences. Do not say one security should be bought or sold.
 
 ## Data Permission Notes
 
-- A-share core reports need daily bars, daily valuation, income/balance/cash-flow/fina indicators, shareholder and peer data.
-- HK reports can deepen when `hk_hold`/southbound, HK financial indicators, and HK daily bars are available. ADR spread and buyback details are currently only surfaced as data-gap notes unless a structured source is added.
+- A-share reports need daily bars, daily valuation, income/balance/cash-flow/fina indicators, shareholder, fund-flow, and peer data.
+- HK reports deepen when `hk_hold`/southbound, HK financial indicators, and HK daily bars are available. ADR spread and buyback details are currently surfaced as notes or data gaps unless a structured source is added.
 - ETF reports need NAV, fund daily bars, index daily bars, fund share, index valuation, and index weights. Industry weights require a future constituent-industry mapping source; until then, use top holding/concentration analysis.
 
 ## Free Market Data Fallbacks
 
-`ENABLE_FREE_MARKET_DATA=1` is enabled by default. Keep Tushare-compatible data as the source of truth for fundamentals, financials, holdings, and index valuation. Use AkShare/efinance only to supplement realtime quote fields; use AkShare/yfinance only when Tushare HK/ETF daily bars are unavailable. If these free sources fail, continue the report and mark unavailable fields as `N/A`.
+`ENABLE_FREE_MARKET_DATA=1` is enabled by default. Keep Tushare-compatible data as the source of truth for fundamentals, financials, holdings, and index valuation. Use AkShare/efinance only to supplement realtime quote fields; use AkShare/yfinance only when Tushare HK/ETF daily bars are unavailable.
 
-For deeper prompt/report changes, read `references/analyst-framework.md`.
+If free sources fail, continue the report and mark unavailable fields as `N/A`.
 
 ## Failure Handling
 
 - Missing `TUSHARE_API_TOKEN`: stop and ask the user to configure `.env`.
-- Missing LLM key: continue with deterministic rule-based advice.
-- Search provider unavailable: skip internet research and continue.
+- Missing LLM key: continue with deterministic research text.
+- Tavily unavailable: either skip internet research or clearly mark LLM fallback.
 - Partial data: generate the report, but clearly mark missing fields as `N/A`.
 - Multiple inputs: compare up to `MAX_COMPARE_COUNT` securities.
 
 ## Key Files
 
 - `run_analysis.py`: unified CLI entry.
-- `analyst_model.py`: professional stock rating and trading-plan model.
-- `hk_analyst_model.py`: Hong Kong stock rating and trading-plan model.
-- `etf_analyst_model.py`: ETF allocation, DCA, and rebalance model.
+- `analyst_model.py`: A-share deterministic research model.
+- `hk_analyst_model.py`: Hong Kong stock deterministic research model.
+- `etf_analyst_model.py`: ETF deterministic research model.
 - `peer_model.py`: peer leader, valuation anchor, and quality benchmark model.
-- `ai_analysis.py`: LLM prompts and fallback advice.
+- `ai_analysis.py`: LLM prompts and fallback research text.
+- `pdf_design.py`: shared PDF visual system and cover components.
 - `providers/`: data, LLM, and search adapters.
-- `providers/free_market_data.py`: optional AkShare/efinance realtime and daily fallback helpers.
+- `providers/free_market_data.py`: optional AkShare/efinance/yfinance fallback helpers.
+- `step3_generate_pdf_report.py`: ETF report generator.
 - `step4_generate_stock_pdf.py`: A-share report generator.
 - `step5_generate_hk_stock_pdf.py`: Hong Kong stock report generator.
-- `step6_generate_comparison_pdf.py`: multi-security comparison report.
+- `step6_generate_comparison_pdf.py`: multi-security comparison report generator.
+
+## Repository Hygiene
+
+Never commit `.env`, API keys, tokens, temp JSON files, generated PDFs, preview images, or local caches. `.gitignore` excludes them by default.
