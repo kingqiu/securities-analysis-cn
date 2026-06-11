@@ -366,6 +366,75 @@ def _cover_bands(bands, kind):
     return table
 
 
+def evidence_map(story, rows, kind="stock"):
+    theme = theme_for(kind)
+    styles = build_styles(kind)
+    story.append(Paragraph("研究假设与证据地图", styles["h1"]))
+    story.append(Paragraph(
+        "本节不是给出确定性判断，而是把当前可见数据整理为研究假设、证据强度和后续观察方向。证据强度较弱的部分仅用于提示思考，不应单独作为决策依据。",
+        styles["caption"],
+    ))
+    story.append(Spacer(1, 0.15 * cm))
+
+    head_style = ParagraphStyle(
+        "EvidenceHead",
+        fontName=CN_FONT,
+        fontSize=7.6,
+        leading=10,
+        textColor=colors.HexColor(theme["ink"]),
+    )
+    body_style = ParagraphStyle(
+        "EvidenceBody",
+        fontName=CN_FONT,
+        fontSize=7.4,
+        leading=10.5,
+        textColor=colors.HexColor(theme["ink"]),
+    )
+    muted_style = ParagraphStyle(
+        "EvidenceMuted",
+        parent=body_style,
+        textColor=colors.HexColor(theme["muted"]),
+    )
+
+    table_data = [[
+        Paragraph("研究假设", head_style),
+        Paragraph("当前可见证据", head_style),
+        Paragraph("强度", head_style),
+        Paragraph("如何理解", head_style),
+        Paragraph("还需观察", head_style),
+    ]]
+    for row in rows:
+        hypothesis, evidence, strength, reading, watch = row
+        table_data.append([
+            Paragraph(str(hypothesis), body_style),
+            Paragraph(str(evidence), muted_style),
+            Paragraph(str(strength), body_style),
+            Paragraph(str(reading), body_style),
+            Paragraph(str(watch), muted_style),
+        ])
+
+    table = Table(
+        table_data,
+        colWidths=[3.0 * cm, 3.5 * cm, 1.5 * cm, 4.2 * cm, 3.8 * cm],
+        repeatRows=1,
+        hAlign="LEFT",
+    )
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(theme["header"])),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.8, colors.HexColor(theme["accent"])),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor(theme["zebra"])]),
+        ("BOX", (0, 0), (-1, -1), 0.25, colors.HexColor(theme["line"])),
+        ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor(theme["line"])),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    story.append(table)
+    story.append(Spacer(1, 0.3 * cm))
+
+
 def _default_cover_questions(kind):
     if kind == "etf":
         return ["指数估值与配置价值", "跟踪质量与流动性", "费率、溢价与再平衡风险"]

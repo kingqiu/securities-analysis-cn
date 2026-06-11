@@ -39,6 +39,7 @@ from pdf_design import (
     build_styles,
     callout_box,
     draw_report_footer,
+    evidence_map,
     metric_cards,
     styled_table,
 )
@@ -769,6 +770,37 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
         ["现金流质量", cf_quality.get("quality_label", "N/A") if cf_quality else "N/A", "利润含金量"],
     ], kind="stock"))
     story.append(Spacer(1, 0.3*cm))
+
+    evidence_map(story, [
+        [
+            "盈利质量是否稳定",
+            f"ROE {fin.get('roe','N/A')}%；毛利率 {fin.get('gross_margin','N/A')}%；现金流质量 {cf_quality.get('quality_label','N/A') if cf_quality else 'N/A'}",
+            "较强",
+            "财务指标能帮助观察利润含金量，但不能单独代表未来增长。",
+            "后续财报、费用率变化、现金流持续性",
+        ],
+        [
+            "估值是否具备参考锚",
+            f"PE(TTM) {val.get('pe_ttm','N/A')}；PB {val.get('pb','N/A')}；PE历史分位 {val.get('pe_percentile','N/A')}%",
+            "中等",
+            "估值分位提供相对位置参考，低分位仍需结合盈利预期验证。",
+            "行业估值中枢、盈利预期、利率与风险偏好",
+        ],
+        [
+            "与同行相比是否有优势",
+            f"行业PE中位 {industry_comp.get('industry_pe_median','N/A') if industry_comp else 'N/A'}；同行样本 {industry_comp.get('peer_count','N/A') if industry_comp else 'N/A'}",
+            "中等",
+            "同行比较可提供横向参照，但需警惕业务结构差异导致的不可比。",
+            "龙头份额、利润率差异、现金流和估值折溢价",
+        ],
+        [
+            "行业景气是否改善",
+            f"行业：{industry}；互联网研究与行业动态作为辅助线索",
+            "偏弱",
+            "新闻和行业动态适合提示方向，但需要和业绩、价格、销量交叉验证。",
+            "订单、价格、销量、库存、市占率变化",
+        ],
+    ], kind="stock")
 
     # ── 二、买卖建议（AI） ──
     story.append(Paragraph("二、投资建议与交易计划", st["h1"]))

@@ -36,6 +36,7 @@ from pdf_design import (
     build_styles,
     callout_box,
     draw_report_footer,
+    evidence_map,
     metric_cards,
     styled_table,
 )
@@ -659,6 +660,37 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
         ["监管敏感度", hk_profile.get("regulatory_sensitivity", "未知"), "估值中枢风险"],
     ], kind="hk"))
     story.append(Spacer(1, 0.3*cm))
+
+    evidence_map(story, [
+        [
+            "估值是否反映流动性折价",
+            f"PE(TTM) {val.get('pe_ttm','N/A')}；PB {val.get('pb','N/A')}；流动性 {liquidity.get('level','未知')}",
+            "中等",
+            "港股估值需要和成交活跃度、资金风险偏好一起看，不能只看低估值。",
+            "成交额、换手、同业港股估值折价",
+        ],
+        [
+            "南向资金是否改善定价权",
+            f"南向持仓比例 {sb_analysis.get('latest_ratio','N/A')}%；趋势 {sb_analysis.get('trend','未知')}",
+            "中等",
+            "南向资金能提示内地资金偏好，但短期流入流出不等于基本面变化。",
+            "港股通持股变化、成交占比、资金连续性",
+        ],
+        [
+            "股东回报是否提供支撑",
+            f"股息率 {dividend_rate if dividend_rate is not None else 'N/A'}%；{hk_profile.get('buyback_signal')}",
+            "中等",
+            "分红和回购可缓冲估值波动，但仍需看现金流和业务增长质量。",
+            "回购公告、自由现金流、派息政策持续性",
+        ],
+        [
+            "监管和汇率是否影响估值",
+            f"币种 {hk_profile.get('currency','HKD')}；监管敏感度 {hk_profile.get('regulatory_sensitivity','未知')}",
+            "偏弱",
+            "这些因素多为外部变量，适合作为风险提示，不能单独推导结论。",
+            "人民币/港元汇率、监管政策、ADR价差",
+        ],
+    ], kind="hk")
 
     # ── 二、投资建议与交易计划 ──
     story.append(Paragraph("二、投资建议与港股交易计划", st["h1"]))

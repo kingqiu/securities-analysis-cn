@@ -36,6 +36,7 @@ from pdf_design import (
     build_styles,
     callout_box,
     draw_report_footer,
+    evidence_map,
     metric_cards,
     styled_table,
 )
@@ -528,6 +529,37 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         ["近60日份额", f"{etf_summary.get('net_flow_60d')}万份", "资金申赎趋势"],
     ], kind="etf"))
     story.append(Spacer(1, 0.3*cm))
+
+    evidence_map(story, [
+        [
+            "跟踪指数是否具备配置价值",
+            f"指数估值分位 {index_val.get('pe_percentile','N/A') if index_val else 'N/A'}；近1年收益 {returns.get('1Y','N/A')}%",
+            "中等",
+            "指数估值能提供配置参照，但仍需结合行业结构和成分集中度理解。",
+            "指数盈利、行业权重、宏观周期位置",
+        ],
+        [
+            "跟踪质量是否可接受",
+            f"年化跟踪误差 {etf_summary.get('tracking_error')}%；日均偏差 {etf_summary.get('tracking_bias')}%",
+            "较强",
+            "跟踪误差来自结构化数据，适合作为基金运作质量的重要参考。",
+            "持续偏差、现金拖累、复制误差和费率影响",
+        ],
+        [
+            "折溢价是否影响交易体验",
+            f"当前溢价 {etf_summary.get('premium')}%；历史分位 {etf_summary.get('premium_pct')}%",
+            "中等",
+            "折溢价提示场内价格与净值偏离，尤其影响短期买入体验。",
+            "盘中IOPV、成交深度、申赎机制",
+        ],
+        [
+            "规模和份额是否稳定",
+            f"规模 {aum_bn}亿元；近60日份额变化 {etf_summary.get('net_flow_60d')}万份",
+            "较强",
+            "规模和份额变化有助于观察资金配置热度和流动性基础。",
+            "持续申赎、成交额、做市活跃度",
+        ],
+    ], kind="etf")
 
     # ── 二、配置与交易计划 ──
     story.append(Paragraph("二、ETF配置与交易计划", st["h1"]))
