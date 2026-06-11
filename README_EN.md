@@ -11,18 +11,41 @@ The project fetches data, builds deterministic research models, summarizes sourc
 - **ETFs / index funds**: exchange-listed ETFs, e.g. 沪深300ETF, 510300.
 - **Comparison reports**: compare up to `MAX_COMPARE_COUNT` securities.
 
+## Agent Compatibility
+
+This project is distributed as a `SKILL.md + Python CLI` skill. It is best suited for **OpenAI Codex / Codex Desktop / Codex CLI** and **Claude Code**. Cursor, Cline, Roo Code, Continue, and similar local coding agents can use it as a normal Python CLI project.
+
+OpenClaw, Hermes Agent, LangGraph, CrewAI, and AutoGen usually need light adaptation or a wrapper around `run_analysis.py`. See [docs/AGENT_COMPATIBILITY.md](docs/AGENT_COMPATIBILITY.md).
+
 ## Installation
+
+Recommended:
 
 ```bash
 git clone https://github.com/kingqiu/securities-analysis-cn.git
 cd securities-analysis-cn
-pip install -r requirements.txt
+python3 scripts/setup.py
+```
+
+If dependencies are already installed:
+
+```bash
+python3 scripts/setup.py --skip-install
+```
+
+Manual setup:
+
+```bash
+python3 -m pip install -r requirements.txt
+cp .env.example .env
 python3 scripts/check_env.py
 ```
 
+For troubleshooting, see [docs/INSTALL.md](docs/INSTALL.md).
+
 ## Configuration
 
-Copy `.env.example` to `.env` and fill in real keys:
+If `.env` does not exist yet, copy `.env.example` to `.env` and fill in real keys:
 
 ```bash
 cp .env.example .env

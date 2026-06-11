@@ -11,18 +11,43 @@ AI Agent Skill：中国证券（A股、港股、ETF）研究复盘报告生成�
 - **ETF/指数基金**：场内 ETF，例如 沪深300ETF、510300。
 - **多标的对比**：支持最多 5 个标的横向比较。
 
+## Agent 兼容性
+
+本项目是一个 `SKILL.md + Python CLI` 形式的 Skill。当前最适合在 **OpenAI Codex / Codex Desktop / Codex CLI** 和 **Claude Code** 中使用，也可以被 Cursor、Cline、Roo Code、Continue 等本地 coding agent 作为普通 Python 项目调用。
+
+OpenClaw、Hermes Agent、LangGraph、CrewAI、AutoGen 等环境通常需要轻量适配或把 `run_analysis.py` 封装为工具。详细说明见 [docs/AGENT_COMPATIBILITY.md](docs/AGENT_COMPATIBILITY.md)。
+
 ## 安装
+
+推荐一键初始化：
 
 ```bash
 git clone https://github.com/kingqiu/securities-analysis-cn.git
 cd securities-analysis-cn
-pip install -r requirements.txt
+python3 scripts/setup.py
+```
+
+该脚本会安装依赖、创建本地 `.env` 模板并运行环境检查。已经安装过依赖时可运行：
+
+```bash
+python3 scripts/setup.py --skip-install
+```
+
+手动安装：
+
+```bash
+git clone https://github.com/kingqiu/securities-analysis-cn.git
+cd securities-analysis-cn
+python3 -m pip install -r requirements.txt
+cp .env.example .env
 python3 scripts/check_env.py
 ```
 
+更多安装排障见 [docs/INSTALL.md](docs/INSTALL.md)。
+
 ## 配置
 
-复制 `.env.example` 为 `.env`，填入真实 API Key：
+如果尚未创建 `.env`，复制 `.env.example` 为 `.env`，填入真实 API Key：
 
 ```bash
 cp .env.example .env
@@ -39,6 +64,14 @@ cp .env.example .env
 没有 LLM Key 时，报告仍会尽量生成，并降级为规则化研究解读。程序不会用大模型补造缺失的结构化财务或行情数据。
 
 ## 最小可运行 Demo
+
+先确认环境检查通过：
+
+```bash
+python3 scripts/check_env.py
+```
+
+再运行：
 
 ```bash
 python3 run_analysis.py 贵州茅台   # A股
@@ -136,6 +169,10 @@ ETF 报告使用 `etf_analyst_model.py`，把 ETF 当作指数暴露和资产配
 securities-analysis-cn/
 ├── SKILL.md                         # Skill 指令入口
 ├── run_analysis.py                  # 统一入口脚本
+├── scripts/setup.py                  # 一键安装与初始化检查
+├── scripts/check_env.py              # 环境与配置预检
+├── docs/INSTALL.md                   # 安装与排障指南
+├── docs/AGENT_COMPATIBILITY.md       # 主流 Agent 兼容性说明
 ├── config.py                        # 配置和 Provider 选择
 ├── ai_analysis.py                   # LLM 研究解读 prompts 和 fallback
 ├── analyst_model.py                 # A股规则化研究模型

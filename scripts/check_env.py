@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import re
 import sys
 import warnings
 from pathlib import Path
@@ -57,6 +58,17 @@ def _warn(label: str, detail: str = "") -> None:
     print(f"[WARN] {label}{suffix}")
 
 
+def _is_placeholder(value: str) -> bool:
+    if not value:
+        return True
+    value = value.strip().lower()
+    return (
+        value.startswith("your_")
+        or value.endswith("_here")
+        or value in {"token", "apikey", "api_key", "none", "null", "changeme"}
+    )
+
+
 def check_modules() -> bool:
     ok = True
     for module, package in REQUIRED_MODULES:
@@ -89,6 +101,7 @@ def check_env_file() -> bool:
         pass
 
     data_token = os.environ.get("TUSHARE_API_TOKEN", "").strip()
+    data_url = os.environ.get("TUSHARE_API_URL", "").strip()
     llm_provider = os.environ.get("LLM_PROVIDER", "minimax").strip()
     search_provider = os.environ.get("SEARCH_PROVIDER", "auto").strip()
     tavily_key = (
@@ -98,14 +111,21 @@ def check_env_file() -> bool:
         or os.environ.get("TAVILY_KEY", "").strip()
     )
     ok = True
-    ok &= _status(bool(data_token), "TUSHARE_API_TOKEN", "required for market and financial data")
+    ok &= _status(not _is_placeholder(data_token), "TUSHARE_API_TOKEN", "required for market and financial data")
+    ok &= _status(bool(re.match(r"^https?://", data_url)), "TUSHARE_API_URL", data_url or "required; e.g. https://tt.xiaodefa.cn")
 
     if llm_provider == "minimax":
         key = os.environ.get("MINIMA_API_KEY", "").strip()
-        _status(bool(key), "MINIMA_API_KEY", "optional; missing key falls back to rule-based research text")
+        if _is_placeholder(key):
+            _warn("MINIMA_API_KEY", "optional; missing key falls back to rule-based research text")
+        else:
+            _status(True, "MINIMA_API_KEY", "configured")
     elif llm_provider == "openai":
         key = os.environ.get("OPENAI_API_KEY", "").strip()
-        _status(bool(key), "OPENAI_API_KEY", "optional; missing key falls back to rule-based research text")
+        if _is_placeholder(key):
+            _warn("OPENAI_API_KEY", "optional; missing key falls back to rule-based research text")
+        else:
+            _status(True, "OPENAI_API_KEY", "configured")
     else:
         ok = False
         _status(False, "LLM_PROVIDER", "supported values: minimax, openai")
@@ -114,17 +134,18 @@ def check_env_file() -> bool:
         ok = False
         _status(False, "SEARCH_PROVIDER", "supported values: auto, tavily, ai_summary, none")
     elif search_provider == "auto":
-        has_tavily = bool(tavily_key)
+        has_tavily = not _is_placeholder(tavily_key)
         if has_tavily:
             _status(True, "TAVILY_API_KEY", "Tavily first; AI fallback if unavailable")
         else:
             _warn("TAVILY_API_KEY", "missing; SEARCH_PROVIDER=auto will use AI fallback")
     elif search_provider == "tavily":
-        has_tavily = bool(tavily_key)
+        has_tavily = not _is_placeholder(tavily_key)
         if has_tavily:
             _status(True, "TAVILY_API_KEY", "Tavily first; AI fallback if unavailable")
         else:
-            _warn("TAVILY_API_KEY", "missing; Tavily cannot run and AI fallback will be used")
+            ok = False
+            _status(False, "TAVILY_API_KEY", "required when SEARCH_PROVIDER=tavily")
     else:
         _status(True, "SEARCH_PROVIDER", search_provider)
 
@@ -166,6 +187,12 @@ def main() -> int:
         return 0
 
     print("Some checks failed. Fix the FAIL items above, then run this checker again.")
+    print()
+    print("Common next steps:")
+    print(f"  1. Install dependencies: {sys.executable} -m pip install -r {PROJECT_DIR / 'requirements.txt'}")
+    print(f"  2. Create config: cp {PROJECT_DIR / '.env.example'} {PROJECT_DIR / '.env'}")
+    print("  3. Fill .env with TUSHARE_API_TOKEN and TUSHARE_API_URL")
+    print(f"  4. Re-run: {sys.executable} {PROJECT_DIR / 'scripts' / 'check_env.py'}")
     return 1
 
 

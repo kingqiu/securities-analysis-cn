@@ -14,14 +14,23 @@ Generate PDF research reports for A-shares, Hong Kong stocks, listed ETFs, and m
 
 The report is a research-review artifact. It should help the user understand evidence, scenarios, risks, and follow-up observations. It must not be framed as direct investment advice, a buy/sell call, or a best entry/exit point.
 
+## Agent Compatibility
+
+This skill is optimized for Codex-style and Claude Code-style local agents that can read files, run shell commands, install Python dependencies, load `.env`, and write PDF files. For Cursor, Cline, Roo Code, Continue, OpenClaw, Hermes Agent, LangGraph, CrewAI, AutoGen, and similar tools, see `docs/AGENT_COMPATIBILITY.md` before installing or wrapping the CLI.
+
 ## Quick Start
 
 Run from the skill directory:
 
 ```bash
-pip install -r requirements.txt
-python3 scripts/check_env.py
+python3 scripts/setup.py
 python3 run_analysis.py <name-or-code>
+```
+
+If dependencies are already installed, run:
+
+```bash
+python3 scripts/setup.py --skip-install
 ```
 
 Examples:
@@ -43,10 +52,18 @@ Outputs are PDF files in the skill directory:
 
 ## Setup
 
-Install dependencies:
+Recommended setup:
 
 ```bash
-pip install -r requirements.txt
+python3 scripts/setup.py
+```
+
+Manual setup:
+
+```bash
+python3 -m pip install -r requirements.txt
+cp .env.example .env
+python3 scripts/check_env.py
 ```
 
 Copy `.env.example` to `.env` and configure:
@@ -58,6 +75,7 @@ Copy `.env.example` to `.env` and configure:
 - `TAVILY_API_KEY`: recommended for latest company news and industry dynamics.
 
 Run `python3 scripts/check_env.py` before the first report or when debugging setup.
+For installation troubleshooting, see `docs/INSTALL.md`.
 
 ## Minimum Demo
 
@@ -152,6 +170,10 @@ If free sources fail, continue the report and mark unavailable fields as `N/A`.
 ## Key Files
 
 - `run_analysis.py`: unified CLI entry.
+- `scripts/setup.py`: one-command local setup helper.
+- `scripts/check_env.py`: preflight dependency/config checker.
+- `docs/INSTALL.md`: installation and troubleshooting guide.
+- `docs/AGENT_COMPATIBILITY.md`: compatibility notes for mainstream coding agents and wrappers.
 - `analyst_model.py`: A-share deterministic research model.
 - `hk_analyst_model.py`: Hong Kong stock deterministic research model.
 - `etf_analyst_model.py`: ETF deterministic research model.
