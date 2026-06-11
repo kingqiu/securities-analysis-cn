@@ -231,11 +231,15 @@ class TavilySearchProvider(SearchProvider):
     def _infer_industry(self, company_name):
         if any(name in company_name for name in ("茅台", "五粮液", "泸州老窖", "汾酒", "洋河")):
             return "白酒"
+        if any(name in company_name for name in ("腾讯", "阿里", "美团", "京东", "网易", "快手", "百度")):
+            return "互联网"
         return ""
 
     def _industry_terms(self, industry):
         if industry == "白酒":
             return ["白酒", "高端白酒", "茅台", "五粮液", "泸州老窖", "批价", "库存", "动销"]
+        if industry == "互联网":
+            return ["互联网", "游戏", "广告", "云计算", "AI", "腾讯", "社交", "视频号"]
         if industry:
             return [industry, f"{industry}行业", "龙头", "政策", "供需", "价格", "竞争格局"]
         return ["行业", "龙头", "政策", "供需", "价格", "竞争格局"]

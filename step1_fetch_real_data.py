@@ -11,6 +11,7 @@ import pandas as pd
 import time
 import re
 from config import TUSHARE_API_URL as API_URL, TUSHARE_API_TOKEN as API_TOKEN
+from config import ENABLE_OPTIONAL_FUND_SALES_VOL
 from config import api_rate_limiter
 
 # API 调用计数器
@@ -77,6 +78,25 @@ def _calc_nav_returns(nav_items, nav_fields):
         else:
             out[k] = None
     return out
+
+
+def _calc_nav_risk(nav_items, nav_fields):
+    if not nav_items:
+        return {"vol_6m": None, "max_drawdown_6m": None}
+    nav_df = pd.DataFrame(nav_items, columns=nav_fields)
+    if "unit_nav" not in nav_df.columns or "nav_date" not in nav_df.columns:
+        return {"vol_6m": None, "max_drawdown_6m": None}
+    nav_df = nav_df.sort_values("nav_date").copy()
+    nav_df["unit_nav"] = pd.to_numeric(nav_df["unit_nav"], errors="coerce")
+    nav_df = nav_df.dropna(subset=["unit_nav"]).tail(126)
+    if len(nav_df) < 20:
+        return {"vol_6m": None, "max_drawdown_6m": None}
+    returns = nav_df["unit_nav"].pct_change().dropna()
+    vol = round(returns.std() * (250 ** 0.5) * 100, 2) if not returns.empty else None
+    peak = nav_df["unit_nav"].cummax()
+    drawdown = nav_df["unit_nav"] / peak - 1
+    mdd = round(drawdown.min() * 100, 2) if not drawdown.empty else None
+    return {"vol_6m": vol, "max_drawdown_6m": mdd}
 
 
 def _extract_theme_keywords(fund_name, index_code):
@@ -189,13 +209,16 @@ def fetch_all_data(ts_code, index_code):
 
     # 7. 申购赎回
     print("7/10 获取申购赎回数据...")
-    sales_vol_data = call_api("fund_sales_vol", {"ts_code": ts_code})
-    if sales_vol_data:
-        data["sales_vol"] = {
-            "fields": sales_vol_data["fields"],
-            "items": sales_vol_data["items"]
-        }
-        print(f"  ✓ 申购赎回: {len(sales_vol_data['items'])} 条")
+    if ENABLE_OPTIONAL_FUND_SALES_VOL:
+        sales_vol_data = call_api("fund_sales_vol", {"ts_code": ts_code})
+        if sales_vol_data:
+            data["sales_vol"] = {
+                "fields": sales_vol_data["fields"],
+                "items": sales_vol_data["items"]
+            }
+            print(f"  ✓ 申购赎回: {len(sales_vol_data['items'])} 条")
+    else:
+        print("  ○ 已跳过（ENABLE_OPTIONAL_FUND_SALES_VOL=1 时启用）")
 
     # 8. 分红数据
     print("8/10 获取分红数据...")
@@ -330,6 +353,7 @@ def fetch_all_data(ts_code, index_code):
             }
 
             returns = _calc_nav_returns(nav_data["items"][:250], nav_data["fields"])
+            risk = _calc_nav_risk(nav_data["items"][:250], nav_data["fields"])
             r1m = returns.get("1M")
             r3m = returns.get("3M")
             r6m = returns.get("6M")
@@ -350,14 +374,29 @@ def fetch_all_data(ts_code, index_code):
             momentum = (r1m or 0) * 0.25 + (r3m or 0) * 0.35 + (r6m or 0) * 0.40
             fee_score = max(0, 20 - total_fee * 20)
             maturity_score = min(15, listed_days / 120)
+            vol = risk.get("vol_6m")
+            mdd = risk.get("max_drawdown_6m")
+            risk_score = 0
+            if vol is not None:
+                risk_score += max(-8, min(8, (25 - vol) * 0.35))
+            if mdd is not None:
+                risk_score += max(-8, min(8, (abs(mdd) - 20) * -0.35))
 
-            score = round(similarity_bonus + momentum + fee_score + maturity_score, 2)
+            score = round(similarity_bonus + momentum + fee_score + maturity_score + risk_score, 2)
 
             scored.append({
                 "item": item,
                 "code": fund_code,
                 "score": score,
                 "returns": returns,
+                "risk": risk,
+                "score_breakdown": {
+                    "similarity": round(similarity_bonus, 2),
+                    "momentum": round(momentum, 2),
+                    "fee": round(fee_score, 2),
+                    "maturity": round(maturity_score, 2),
+                    "risk": round(risk_score, 2),
+                },
             })
 
         scored.sort(key=lambda x: x["score"], reverse=True)
@@ -375,6 +414,7 @@ def fetch_all_data(ts_code, index_code):
             data["similar_selection_meta"] = {
                 "method": "同赛道候选池+潜力评分Top5",
                 "keywords": keywords,
+                "score_formula": "赛道匹配 + 1/3/6月收益动量 + 费率成本 + 成立时间 + 近6月波动/回撤风险",
                 "top_scores": [
                     {
                         "ts_code": x["code"],
@@ -382,6 +422,9 @@ def fetch_all_data(ts_code, index_code):
                         "ret_1m": x["returns"].get("1M"),
                         "ret_3m": x["returns"].get("3M"),
                         "ret_6m": x["returns"].get("6M"),
+                        "vol_6m": x["risk"].get("vol_6m"),
+                        "max_drawdown_6m": x["risk"].get("max_drawdown_6m"),
+                        "score_breakdown": x.get("score_breakdown", {}),
                     }
                     for x in top5
                 ],

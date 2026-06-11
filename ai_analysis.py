@@ -5,9 +5,14 @@ Minima AI 买卖建议模块
 """
 
 from analyst_model import build_stock_research_view, render_stock_research_brief
+from etf_analyst_model import build_etf_research_view, render_etf_research_brief
+from hk_analyst_model import build_hk_research_view, render_hk_research_brief
 from providers import get_llm_provider
 
-_ETF_PROMPT = """你是一位专业的基金分析师。请基于以下量化数据，对{name}（{ts_code}）给出简洁的投资建议。
+_ETF_PROMPT = """你是一位专业的基金分析师。请基于以下量化数据和已计算的 ETF 配置模型结论，对{name}（{ts_code}）给出简洁、审慎、可复盘的投资建议。
+
+【ETF配置模型结论（必须遵守，不得擅自改评级、加仓条件或再平衡规则）】
+{etf_view}
 
 数据摘要：
 - 近1月/3月/1年收益率：{ret_1m}% / {ret_3m}% / {ret_1y}%
@@ -18,13 +23,15 @@ _ETF_PROMPT = """你是一位专业的基金分析师。请基于以下量化数
 - 净值位置：当前净值在20日/60日均线{ma_position}
 - 跟踪指数估值：PE={index_pe}（历史{index_pe_pct}%分位），PB={index_pb}（历史{index_pb_pct}%分位）
 - 当前溢折率：{premium}%（历史{premium_pct}%分位）
+- 场内实时状态：价格={current_price}，涨跌幅={change_pct}%，换手率={turnover_rate}%，成交额={amount}
 
 请给出：
-1. 投资评级（买入 / 持有 / 减持）
-2. 核心理由（3条，每条1-2句）
-3. 主要风险提示（1条）
+1. 配置结论与适合人群（解释模型评级，不要改成股票式“买入/卖出”）
+2. 定投/加仓/再平衡规则解释（强调是触发条件，不是确定性最佳点）
+3. 核心理由（3条，每条1-2句）
+4. 主要风险提示（至少2条）
 
-要求：语言简洁专业，总字数200字以内，不要出现"根据以上数据"等套话。"""
+要求：语言简洁专业，总字数350字以内；不要编造数据；不要使用“稳赚”“最佳买点”“必须买入”等确定性表述。"""
 
 _STOCK_PROMPT = """你是一位资深的卖方研究员。请基于以下量化数据和已计算的投研模型结论，对{name}（{ts_code}）给出专业、审慎、可复盘的投资建议。
 
@@ -113,7 +120,10 @@ _ETF_COMPARISON_PROMPT = """你是一位经验丰富的基金顾问，正在向�
 - 结论要明确："如果让我选一个，我选XX，因为..."
 - 总字数400字以内"""
 
-_HK_STOCK_PROMPT = """你是一位专业的港股分析师。请基于以下量化数据，对{name}（{ts_code}）给出简洁的投资建议。
+_HK_STOCK_PROMPT = """你是一位专业的港股分析师。请基于以下量化数据和已计算的港股投研模型结论，对{name}（{ts_code}）给出简洁、审慎、可复盘的投资建议。
+
+【港股投研模型结论（必须遵守，不得擅自改评级、价格区间或止损位）】
+{hk_view}
 
 数据摘要：
 - 当前PE（TTM）：{pe_ttm}，PB（TTM）：{pb_ttm}
@@ -124,13 +134,15 @@ _HK_STOCK_PROMPT = """你是一位专业的港股分析师。请基于以下量�
 - 现金流质量：经营现金流/营收={ocf_sales}（>0.15为健康）
 - 南向资金持仓比例：{southbound_ratio}%，近期趋势：{southbound_trend}
 - 股价位置：当前股价在20日/60日均线{ma_position}
+- 当前价格：{cur_price} HKD，价格来源：{price_source}
 
 请给出：
-1. 投资评级（买入 / 持有 / 减持）
-2. 核心理由（3条，每条1-2句）
-3. 主要风险提示（1条，需提及港股特有风险如汇率、流动性）
+1. 投资评级与适合人群（解释模型评级，不要自行改评级）
+2. 买入/观察/止盈/止损区间解释（说明这是交易计划区间，不是确定性最佳点；若模型没有区间则说明价格数据不足）
+3. 核心理由（3条，每条1-2句）
+4. 主要风险与反证条件（至少2条，需提及港股特有风险如汇率、流动性、南向资金）
 
-要求：语言简洁专业，总字数200字以内，不要出现"根据以上数据"等套话。"""
+要求：语言简洁专业，总字数400字以内；不要编造数据；不要使用“稳赚”“最佳买点”等确定性表述。"""
 
 
 def _fmt_pct(value):
@@ -294,9 +306,11 @@ def get_investment_advice(security_type: str, summary_data: dict) -> str:
 
     if security_type == "etf":
         d = summary_data
+        etf_view = render_etf_research_brief(build_etf_research_view(d))
         prompt = _ETF_PROMPT.format(
             name=d.get("name", ""),
             ts_code=d.get("ts_code", ""),
+            etf_view=etf_view,
             ret_1m=d.get("ret_1m", "N/A"),
             ret_3m=d.get("ret_3m", "N/A"),
             ret_1y=d.get("ret_1y", "N/A"),
@@ -312,6 +326,10 @@ def get_investment_advice(security_type: str, summary_data: dict) -> str:
             index_pb_pct=d.get("index_pb_pct", "N/A"),
             premium=d.get("premium", "N/A"),
             premium_pct=d.get("premium_pct", "N/A"),
+            current_price=d.get("current_price", "N/A"),
+            change_pct=d.get("change_pct", "N/A"),
+            turnover_rate=d.get("turnover_rate", "N/A"),
+            amount=d.get("amount", "N/A"),
         )
     elif security_type == "stock":
         d = summary_data
@@ -348,9 +366,11 @@ def get_investment_advice(security_type: str, summary_data: dict) -> str:
         )
     elif security_type == "hk_stock":
         d = summary_data
+        hk_view = render_hk_research_brief(build_hk_research_view(d))
         prompt = _HK_STOCK_PROMPT.format(
             name=d.get("name", ""),
             ts_code=d.get("ts_code", ""),
+            hk_view=hk_view,
             pe_ttm=d.get("pe_ttm", "N/A"),
             pb_ttm=d.get("pb_ttm", "N/A"),
             roe_avg=d.get("roe_avg", "N/A"),
@@ -362,6 +382,8 @@ def get_investment_advice(security_type: str, summary_data: dict) -> str:
             southbound_ratio=d.get("southbound_ratio", "N/A"),
             southbound_trend=d.get("southbound_trend", "未知"),
             ma_position=d.get("ma_position", "未知"),
+            cur_price=d.get("cur_price", "N/A"),
+            price_source=d.get("price_source", "N/A"),
         )
     else:
         return _fallback_advice(security_type, summary_data)
@@ -396,7 +418,8 @@ def get_comparison_advice(compare_type: str, summaries: list) -> str:
                 f"  年化跟踪误差：{s.get('tracking_error', 'N/A')}%\n"
                 f"  综合费率：{s.get('total_fee', 'N/A')}%/年\n"
                 f"  基金规模：{s.get('aum', 'N/A')}亿元\n"
-                f"  跟踪指数PE分位：{s.get('index_pe_pct', 'N/A')}%"
+                f"  跟踪指数PE分位：{s.get('index_pe_pct', 'N/A')}%\n"
+                f"  场内实时：价格{s.get('cur_price', 'N/A')}，涨跌{s.get('change_pct', 'N/A')}%，换手{s.get('turnover_rate', 'N/A')}%，成交额{s.get('amount', 'N/A')}"
             )
         data_table = "\n\n".join(lines)
         prompt = _ETF_COMPARISON_PROMPT.format(count=count, data_table=data_table)
@@ -420,7 +443,8 @@ def get_comparison_advice(compare_type: str, summaries: list) -> str:
                 f"  营收增速：{s.get('rev_growth', 'N/A')}%　净利增速：{s.get('profit_growth', 'N/A')}%\n"
                 f"  ROE：{s.get('roe', 'N/A')}%　毛利率：{s.get('gross_margin', 'N/A')}%\n"
                 f"  资产负债率：{s.get('debt_ratio', 'N/A')}%\n"
-                f"  股息率：{s.get('dividend_yield', 'N/A')}%"
+                f"  股息率：{s.get('dividend_yield', 'N/A')}%\n"
+                f"  实时行情：价格{s.get('cur_price', 'N/A')}，涨跌{s.get('change_pct', 'N/A')}%，来源{s.get('price_source', 'N/A')}"
             )
         data_table = "\n\n".join(lines)
         prompt = _STOCK_COMPARISON_PROMPT.format(

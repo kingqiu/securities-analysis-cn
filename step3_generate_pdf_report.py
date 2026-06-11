@@ -29,6 +29,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 
 from ai_analysis import get_investment_advice
 from config import md_to_rl, md_to_story
+from etf_analyst_model import build_etf_research_view, render_etf_research_brief
 
 # ── 字体注册 ──────────────────────────────────────────────────────────────────
 
@@ -128,6 +129,15 @@ def _load(json_file):
             k: pd.DataFrame(v["items"], columns=v["fields"])
             for k, v in raw["similar_nav_data"].items()
         }
+
+    if "similar_selection_meta" in raw:
+        d["similar_selection_meta"] = raw["similar_selection_meta"]
+
+    if "realtime_quote" in raw and isinstance(raw["realtime_quote"], dict):
+        d["realtime_quote"] = raw["realtime_quote"]
+
+    if "free_market_data" in raw:
+        d["free_market_data"] = raw["free_market_data"]
 
     d["stock_names"] = raw.get("stock_names", {})
     return d
@@ -389,10 +399,12 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     portfolio_df = d.get("portfolio")
     similar_df   = d.get("similar_funds")
     similar_nav  = d.get("similar_nav_data", {})
+    similar_meta = d.get("similar_selection_meta", {})
     stock_names  = d.get("stock_names", {})
     manager_df   = d.get("manager")
     sales_vol_df = d.get("sales_vol")
     index_dailybasic_df = d.get("index_dailybasic")
+    realtime_quote = d.get("realtime_quote", {})
 
     returns = _calc_returns(nav_df)
     te      = _calc_te(daily_df, index_df)
@@ -429,10 +441,10 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
             rank = sum(1 for r in peer_returns if r > returns["1Y"])
             similar_rank = f"{rank+1}/{len(peer_returns)+1}"
 
-    # AI 买卖建议
-    advice_text = get_investment_advice("etf", {
+    etf_summary = {
         "name": fund_name,
         "ts_code": d["ts_code"],
+        "index_code": d.get("index_code", ""),
         "ret_1m": returns.get("1M", "N/A"),
         "ret_3m": returns.get("3M", "N/A"),
         "ret_1y": returns.get("1Y", "N/A"),
@@ -448,7 +460,17 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         "index_pb_pct": index_val.get("pb_percentile", "N/A") if index_val else "N/A",
         "premium": premium_disc.get("current_premium", "N/A") if premium_disc else "N/A",
         "premium_pct": premium_disc.get("premium_percentile", "N/A") if premium_disc else "N/A",
-    })
+        "flow_trend": flow_metrics.get("trend_20d", "未知") if flow_metrics else "未知",
+        "current_price": realtime_quote.get("price", "N/A"),
+        "change_pct": realtime_quote.get("change_pct", "N/A"),
+        "turnover_rate": realtime_quote.get("turnover_rate", "N/A"),
+        "amount": realtime_quote.get("amount", "N/A"),
+    }
+    etf_view = build_etf_research_view(etf_summary)
+    etf_brief = render_etf_research_brief(etf_view)
+
+    # AI 建议：作为配置模型之后的解释补充
+    advice_text = get_investment_advice("etf", etf_summary)
 
     doc = SimpleDocTemplate(
         output_path, pagesize=A4,
@@ -464,7 +486,7 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         Paragraph("ETF 深度分析报告", st["subtitle"]),
         Spacer(1, 0.5*cm),
         Paragraph(f"基金代码：{d['ts_code']}　　跟踪指数：{d['index_code']}", st["body"]),
-        Paragraph(f"报告日期：{datetime.now().strftime('%Y年%m月%d日')}　　数据来源：小德法 Tushare API", st["body"]),
+        Paragraph(f"报告日期：{datetime.now().strftime('%Y年%m月%d日')}　　数据来源：小德法 Tushare API + 免费行情兜底", st["body"]),
         PageBreak(),
     ]
 
@@ -476,14 +498,29 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         ["基金公司", basic.get("management",""), "托管银行", basic.get("custodian","")],
         ["管理费率", f"{m_fee}%/年", "托管费率", f"{c_fee}%/年"],
         ["综合费率", f"{total_fee}%/年", "基金规模", f"{aum_bn}亿元"],
+        ["场内价格", f"{realtime_quote.get('price', 'N/A')}", "盘中涨跌", f"{realtime_quote.get('change_pct', 'N/A')}%"],
     ]
     story.append(_tbl(info_rows, col_widths=[3.5*cm, 5.5*cm, 3.5*cm, 5.5*cm]))
     story.append(Spacer(1, 0.3*cm))
 
-    # ── 二、买卖建议（AI） ──
-    story.append(Paragraph("二、投资建议（AI分析）", st["h1"]))
-    story.append(Paragraph("以下建议由 MiniMax-M2.7 模型基于量化数据自动生成，仅供参考，不构成投资依据。", st["caption"]))
+    # ── 二、配置与交易计划 ──
+    story.append(Paragraph("二、ETF配置与交易计划", st["h1"]))
+    story.append(Paragraph("以下结论由 ETF 配置模型先生成，重点关注指数估值、跟踪质量、规模流动性、费率和溢价折价；仅供研究参考。", st["caption"]))
     story.append(Spacer(1, 0.2*cm))
+    plan_rows = [
+        ["事项", "模型结论"],
+        ["配置评级", f"{etf_view.get('allocation_rating')}（配置分{etf_view.get('allocation_score')}）"],
+        ["交易评级", f"{etf_view.get('trading_rating')}（交易分{etf_view.get('trading_score')}）"],
+        ["场内实时状态", f"价格{etf_view.get('current_price', 'N/A')}；涨跌{etf_view.get('change_pct', 'N/A')}%；换手{etf_view.get('turnover_rate', 'N/A')}%"],
+        ["定投计划", etf_view.get("dca_plan", "")],
+        ["加仓条件", etf_view.get("add_condition", "")],
+        ["止盈/再平衡", etf_view.get("rebalance_condition", "")],
+    ]
+    story.append(_tbl(plan_rows, col_widths=[3.5*cm, 12.5*cm]))
+    story.append(Spacer(1, 0.2*cm))
+    story.extend(md_to_story(etf_brief, st["body"], table_builder=_tbl))
+    story.append(Spacer(1, 0.2*cm))
+    story.append(Paragraph("AI 解读", st["h2"]))
     story.extend(md_to_story(advice_text, st["body"], table_builder=_tbl))
     story.append(Spacer(1, 0.3*cm))
 
@@ -555,13 +592,20 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
 
     # ── 五、同类基金对比 ──
     if similar_df is not None and not similar_df.empty:
-        story.append(Paragraph("五、同类基金对比（业绩）", st["h1"]))
+        story.append(Paragraph("五、同类基金对比（业绩与风险）", st["h1"]))
+        if similar_meta:
+            story.append(Paragraph(
+                f"筛选方法：{similar_meta.get('method', '同赛道候选池')}；评分口径：{similar_meta.get('score_formula', '收益、费率、规模和风险综合评分')}",
+                st["caption"]
+            ))
 
         peer_rows = []
+        score_map = {x.get("ts_code"): x for x in similar_meta.get("top_scores", [])}
         for _, row in similar_df.iterrows():
             code = row.get("ts_code", "")
             snav = similar_nav.get(code)
             pr = _calc_returns(snav) if snav is not None else {}
+            meta_row = score_map.get(code, {})
 
             r1m = pr.get("1M")
             r3m = pr.get("3M")
@@ -573,6 +617,9 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
                 "r1m": r1m,
                 "r3m": r3m,
                 "r6m": r6m,
+                "score": meta_row.get("score"),
+                "vol_6m": meta_row.get("vol_6m"),
+                "max_drawdown_6m": meta_row.get("max_drawdown_6m"),
             })
 
         peer_rows.sort(
@@ -584,17 +631,18 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
             )
         )
 
-        comp_rows = [["基金名称", "管理公司", "近1月收益", "近3月收益", "近6月收益"]]
+        comp_rows = [["基金名称", "管理公司", "综合评分", "近6月收益", "近6月波动", "近6月最大回撤"]]
         for item in peer_rows:
             comp_rows.append([
                 item["name"],
                 item["management"],
-                f"{item['r1m']:.2f}%" if item["r1m"] is not None else "N/A",
-                f"{item['r3m']:.2f}%" if item["r3m"] is not None else "N/A",
+                f"{item['score']:.2f}" if item["score"] is not None else "N/A",
                 f"{item['r6m']:.2f}%" if item["r6m"] is not None else "N/A",
+                f"{item['vol_6m']:.2f}%" if item["vol_6m"] is not None else "N/A",
+                f"{item['max_drawdown_6m']:.2f}%" if item["max_drawdown_6m"] is not None else "N/A",
             ])
 
-        story.append(_tbl(comp_rows, col_widths=[5*cm, 4*cm, 2.5*cm, 2.5*cm, 2.5*cm]))
+        story.append(_tbl(comp_rows, col_widths=[4.2*cm, 3.4*cm, 2.2*cm, 2.2*cm, 2.4*cm, 2.6*cm]))
         story.append(Spacer(1, 0.3*cm))
 
     # ── 六、规模与流动性 ──

@@ -112,6 +112,11 @@ MAX_COMPARE_COUNT = 5       # 最多同时对比5只标的
 # 可选接口能力。部分 Tushare 兼容网关不开放这些接口，默认关闭以减少噪音。
 ENABLE_OPTIONAL_CONCEPTS = _os.environ.get("ENABLE_OPTIONAL_CONCEPTS", "0") == "1"
 ENABLE_OPTIONAL_MACRO_NEWS = _os.environ.get("ENABLE_OPTIONAL_MACRO_NEWS", "0") == "1"
+ENABLE_OPTIONAL_FUND_SALES_VOL = _os.environ.get("ENABLE_OPTIONAL_FUND_SALES_VOL", "0") == "1"
+
+# 免费行情兜底。启用后会尝试用 AkShare/efinance 补充港股/ETF/A股实时行情；
+# 失败时不会中断主数据源流程。
+ENABLE_FREE_MARKET_DATA = _os.environ.get("ENABLE_FREE_MARKET_DATA", "1") == "1"
 
 # ============================================================
 # API 限流器（Tushare 接口限制 120次/分钟）

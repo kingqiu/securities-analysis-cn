@@ -4,3 +4,6 @@ matplotlib>=3.7.0
 reportlab>=4.0.0
 numpy>=1.24.0
 python-dotenv>=1.0.0
+akshare>=1.12.0
+efinance>=0.5.5
+yfinance>=0.2.0

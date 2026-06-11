@@ -285,6 +285,11 @@ def _get_rows(data, key):
     return _to_dict_list(raw)
 
 
+def _get_realtime_quote(data):
+    quote = data.get("realtime_quote")
+    return quote if isinstance(quote, dict) else {}
+
+
 def _extract_stock_summary(r):
     """从单只股票的完整数据中提取对比所需的关键指标"""
     data = r["data"]
@@ -350,6 +355,9 @@ def _extract_stock_summary(r):
     except (TypeError, ValueError):
         pass
 
+    quote = _get_realtime_quote(data)
+    cur_price = quote.get("price") if quote.get("price") is not None else latest_db.get("close", "N/A")
+
     return {
         "name": r["name"],
         "ts_code": r["ts_code"],
@@ -368,7 +376,11 @@ def _extract_stock_summary(r):
         "debt_ratio": latest_fina.get("debt_to_assets", latest_bs.get("total_liab_to_total_assets", "N/A")),
         "cfo_ratio": cfo_ratio,
         "dividend_yield": latest_db.get("dv_ttm", "N/A"),
-        "cur_price": latest_db.get("close", "N/A"),
+        "cur_price": cur_price,
+        "change_pct": quote.get("change_pct", "N/A"),
+        "turnover_rate": quote.get("turnover_rate", "N/A"),
+        "amount": quote.get("amount", "N/A"),
+        "price_source": quote.get("source", "Tushare日线/估值"),
     }
 
 
@@ -382,6 +394,7 @@ def _extract_hk_stock_summary(r):
 
     daily_rows = _get_rows(data, "hk_daily") or _get_rows(data, "daily")
     latest = daily_rows[0] if daily_rows else {}
+    quote = _get_realtime_quote(data)
 
     fina_rows = _get_rows(data, "hk_fina_indicator") or _get_rows(data, "fina_indicator")
     latest_fina = fina_rows[0] if fina_rows else {}
@@ -425,7 +438,11 @@ def _extract_hk_stock_summary(r):
         "debt_ratio": latest_fina.get("debt_to_assets", "N/A"),
         "cfo_ratio": "N/A",
         "dividend_yield": latest_fina.get("dividend_yield", "N/A"),
-        "cur_price": latest.get("close", "N/A"),
+        "cur_price": quote.get("price") if quote.get("price") is not None else latest.get("close", "N/A"),
+        "change_pct": quote.get("change_pct", "N/A"),
+        "turnover_rate": quote.get("turnover_rate", "N/A"),
+        "amount": quote.get("amount", "N/A"),
+        "price_source": quote.get("source", "港股日线"),
     }
 
 
@@ -437,9 +454,8 @@ def _extract_etf_summary(r):
     basic_rows = _get_rows(data, "fund_basic") or _get_rows(data, "basic")
     basic = basic_rows[0] if basic_rows else {}
 
-    nav_rows = _get_rows(data, "nav_data")
-    fee_rows = _get_rows(data, "fee_data")
-    fee_data = fee_rows[0] if fee_rows else {}
+    nav_rows = _get_rows(data, "nav_data") or _get_rows(data, "nav")
+    quote = _get_realtime_quote(data)
 
     # 收益率计算 — 也需要尝试从 daily 的 fields+items 提取
     ret_1m, ret_3m, ret_1y = "N/A", "N/A", "N/A"
@@ -468,8 +484,8 @@ def _extract_etf_summary(r):
             ret_1y = round((cur / navs[244] - 1) * 100, 2)
 
     # 费率
-    mgmt_fee = fee_data.get("management_fee") or basic.get("management_fee", "N/A")
-    custody_fee = fee_data.get("custodian_fee") or basic.get("custodian_fee", "N/A")
+    mgmt_fee = basic.get("m_fee") or basic.get("management_fee", "N/A")
+    custody_fee = basic.get("c_fee") or basic.get("custodian_fee", "N/A")
     total_fee = "N/A"
     try:
         total_fee = round(float(mgmt_fee) + float(custody_fee), 3)
@@ -478,10 +494,11 @@ def _extract_etf_summary(r):
 
     # 规模
     aum = "N/A"
-    size_rows = _get_rows(data, "fund_size")
+    size_rows = _get_rows(data, "fund_size") or _get_rows(data, "share")
     if size_rows:
         try:
-            aum = round(float(size_rows[0].get("net_asset", 0)) / 1e8, 2)
+            raw_size = size_rows[0].get("net_asset") or size_rows[0].get("fd_share") or 0
+            aum = round(float(raw_size) / 1e4, 2)
         except (TypeError, ValueError):
             pass
 
@@ -501,6 +518,11 @@ def _extract_etf_summary(r):
         "aum": aum,
         "tracking_error": data.get("tracking_error", "N/A"),
         "index_pe_pct": "N/A",
+        "cur_price": quote.get("price", "N/A"),
+        "change_pct": quote.get("change_pct", "N/A"),
+        "turnover_rate": quote.get("turnover_rate", "N/A"),
+        "amount": quote.get("amount", "N/A"),
+        "price_source": quote.get("source", "N/A"),
     }
 
 
@@ -611,6 +633,8 @@ def _build_stock_comparison(story, st, all_results, summaries, names, count, com
     rows.append(["行业"] + [s.get("industry", "N/A") for s in summaries])
     rows.append(["市值(亿元)"] + [_safe(s.get("market_cap"), ".1f") for s in summaries])
     rows.append(["当前股价"] + [_safe(s.get("cur_price"), ".2f") for s in summaries])
+    rows.append(["盘中涨跌(%)"] + [_safe(s.get("change_pct"), ".2f") for s in summaries])
+    rows.append(["价格来源"] + [str(s.get("price_source", "N/A"))[:14] for s in summaries])
     rows.append(["PE(TTM)"] + [_safe(s.get("pe_ttm"), ".1f") for s in summaries])
     rows.append(["PB"] + [_safe(s.get("pb"), ".2f") for s in summaries])
     rows.append(["ROE(%)"] + [_safe(s.get("roe"), ".1f", "%") for s in summaries])
@@ -842,6 +866,8 @@ def _build_etf_comparison(story, st, all_results, summaries, names, count):
     rows.append(["成立日期"] + [str(s.get("found_date", "N/A")) for s in summaries])
     rows.append(["规模(亿元)"] + [_safe(s.get("aum"), ".2f") for s in summaries])
     rows.append(["综合费率(%/年)"] + [_safe(s.get("total_fee"), ".3f") for s in summaries])
+    rows.append(["场内价格"] + [_safe(s.get("cur_price"), ".3f") for s in summaries])
+    rows.append(["盘中涨跌(%)"] + [_safe(s.get("change_pct"), ".2f") for s in summaries])
 
     story.append(_tbl(rows, col_widths=col_w))
     story.append(Spacer(1, 0.2 * cm))
@@ -957,6 +983,8 @@ def _build_etf_comparison(story, st, all_results, summaries, names, count):
 
     liq_rows = [["指标"] + names]
     liq_rows.append(["基金规模(亿元)"] + [_safe(s.get("aum"), ".2f") for s in summaries])
+    liq_rows.append(["换手率(%)"] + [_safe(s.get("turnover_rate"), ".2f") for s in summaries])
+    liq_rows.append(["成交额(元)"] + [_safe(s.get("amount"), ".0f") for s in summaries])
 
     story.append(_tbl(liq_rows, col_widths=col_w))
     story.append(Spacer(1, 0.2 * cm))

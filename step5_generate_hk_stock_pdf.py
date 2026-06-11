@@ -29,6 +29,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 
 from ai_analysis import get_investment_advice, get_industry_news
 from config import md_to_rl, md_to_story
+from hk_analyst_model import build_hk_research_view, render_hk_research_brief
 
 # ── 字体注册 ──────────────────────────────────────────────────────────────────
 
@@ -138,6 +139,12 @@ def _load(json_file):
 
     if "web_research" in raw:
         d["web_research"] = raw["web_research"]
+
+    if "realtime_quote" in raw and isinstance(raw["realtime_quote"], dict):
+        d["realtime_quote"] = raw["realtime_quote"]
+
+    if "free_market_data" in raw:
+        d["free_market_data"] = raw["free_market_data"]
 
     return d
 
@@ -485,20 +492,35 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
     concepts_df = d.get("concepts")
     macro_news_df = d.get("macro_news")
     web_research = d.get("web_research")
+    realtime_quote = d.get("realtime_quote", {})
 
     val = _latest_valuation(fina_df, daily_df)
+    if realtime_quote.get("price"):
+        try:
+            val["cur_price"] = round(float(realtime_quote["price"]), 3)
+            val["price_source"] = realtime_quote.get("source", "free_realtime_quote")
+        except (TypeError, ValueError):
+            pass
     fin = _fin_summary(income_df, fina_df)
     ma_pos = _ma_position(daily_df)
     cf_quality = _cashflow_quality(cashflow_df, income_df)
     sb_analysis = _southbound_analysis(hold_df)
 
-    # AI 买卖建议
-    advice_text = get_investment_advice("hk_stock", {
+    dividend_rate = None
+    if fina_df is not None and not fina_df.empty and "dividend_rate" in fina_df.columns:
+        div_series = pd.to_numeric(fina_df["dividend_rate"], errors="coerce").dropna()
+        if not div_series.empty:
+            raw_div_rate = float(div_series.iloc[-1])
+            dividend_rate = round(raw_div_rate * 100, 2) if raw_div_rate <= 0.2 else round(raw_div_rate, 2)
+
+    hk_summary = {
         "name": stock_name,
         "ts_code": d["ts_code"],
         "pe_ttm": val.get("pe_ttm", "N/A"),
+        "pb": val.get("pb", "N/A"),
         "pb_ttm": val.get("pb", "N/A"),
         "roe_avg": val.get("roe_avg", "N/A"),
+        "roe": fin.get("roe", val.get("roe_avg", "N/A")),
         "debt_ratio": fin.get("debt_ratio", "N/A"),
         "rev_growth": fin.get("rev_growth", "N/A"),
         "profit_growth": fin.get("profit_growth", "N/A"),
@@ -507,7 +529,15 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
         "southbound_ratio": sb_analysis.get("latest_ratio", "N/A"),
         "southbound_trend": sb_analysis.get("trend", "未知"),
         "ma_position": ma_pos,
-    })
+        "cur_price": val.get("cur_price", "N/A"),
+        "price_source": val.get("price_source", "Tushare日线"),
+        "dividend_rate": dividend_rate if dividend_rate is not None else "N/A",
+    }
+    hk_view = build_hk_research_view(hk_summary)
+    hk_brief = render_hk_research_brief(hk_view)
+
+    # AI 买卖建议：只作为模型结论后的解释补充
+    advice_text = get_investment_advice("hk_stock", hk_summary)
 
     doc = SimpleDocTemplate(
         output_path, pagesize=A4,
@@ -523,7 +553,7 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
         Paragraph("港股深度分析报告", st["subtitle"]),
         Spacer(1, 0.5*cm),
         Paragraph(f"股票代码：{d['ts_code']}　　市场：香港联交所", st["body"]),
-        Paragraph(f"报告日期：{datetime.now().strftime('%Y年%m月%d日')}　　数据来源：小德法 Tushare API", st["body"]),
+        Paragraph(f"报告日期：{datetime.now().strftime('%Y年%m月%d日')}　　数据来源：小德法 Tushare API + 免费行情兜底", st["body"]),
         PageBreak(),
     ]
 
@@ -534,17 +564,36 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
         ["全称", basic.get("fullname", basic.get("name", "")), "上市日期", basic.get("list_date", "N/A")],
         ["当前PE(TTM)", str(val.get("pe_ttm", "N/A")), "当前PB", str(val.get("pb", "N/A"))],
         ["最新ROE", f"{val.get('roe_avg', 'N/A')}%", "当前股价", f"{val.get('cur_price', 'N/A')} HKD"],
+        ["价格来源", val.get("price_source", "Tushare日线"), "盘中涨跌", f"{realtime_quote.get('change_pct', 'N/A')}%"],
     ]
     story.append(_tbl(info_rows, col_widths=[3.5*cm, 5.5*cm, 3.5*cm, 5.5*cm]))
     story.append(Spacer(1, 0.3*cm))
 
-    # ── 二、投资建议（AI） ──
-    story.append(Paragraph("二、投资建议（AI分析）", st["h1"]))
+    # ── 二、投资建议与交易计划 ──
+    story.append(Paragraph("二、投资建议与港股交易计划", st["h1"]))
     story.append(Paragraph(
-        "以下建议由 MiniMax-M2.7 模型基于量化数据自动生成，仅供参考，不构成投资依据。",
+        "以下结论由港股投研模型先生成，重点纳入南向资金、流动性、股息、汇率和趋势风险；仅供研究参考，不构成投资依据。",
         st["caption"]
     ))
     story.append(Spacer(1, 0.2*cm))
+    plan_rows = [["区间/触发器", "价格", "港股操作含义"]]
+    if hk_view.get("buy_zone"):
+        z = hk_view["buy_zone"]
+        plan_rows.append(["分批买入区", f"{z[0]}-{z[1]} HKD", "回调进入安全边际区，结合成交额和南向资金分批买入"])
+    if hk_view.get("watch_zone"):
+        z = hk_view["watch_zone"]
+        plan_rows.append(["观察区", f"{z[0]}-{z[1]} HKD", "等待业绩、南向资金或行业催化进一步确认"])
+    if hk_view.get("take_profit_zone"):
+        z = hk_view["take_profit_zone"]
+        plan_rows.append(["分批止盈区", f"{z[0]}-{z[1]} HKD", "降低收益预期，分批兑现或复盘持有理由"])
+    if hk_view.get("stop_loss") is not None:
+        plan_rows.append(["复盘止损位", f"{hk_view['stop_loss']} HKD", "跌破后复核业绩、流动性和汇率假设"])
+    if len(plan_rows) > 1:
+        story.append(_tbl(plan_rows, col_widths=[3.5*cm, 4*cm, 8.5*cm]))
+        story.append(Spacer(1, 0.2*cm))
+    story.extend(md_to_story(hk_brief, st["body"], table_builder=_tbl))
+    story.append(Spacer(1, 0.2*cm))
+    story.append(Paragraph("AI 解读", st["h2"]))
     story.extend(md_to_story(advice_text, st["body"], table_builder=_tbl))
     story.append(Spacer(1, 0.3*cm))
 
@@ -672,10 +721,16 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
             for _, row in fi.tail(5).iterrows():
                 dps = row.get(dps_col)
                 div_rate = row.get("dividend_rate")
+                div_rate_num = None
+                try:
+                    div_rate_num = float(div_rate)
+                    div_rate_num = div_rate_num * 100 if div_rate_num <= 0.2 else div_rate_num
+                except (TypeError, ValueError):
+                    pass
                 div_rows.append([
                     str(row.get("end_date", ""))[:6],
                     str(round(float(dps), 4)) if dps else "—",
-                    str(round(float(div_rate) * 100, 2)) if div_rate else "N/A",
+                    str(round(div_rate_num, 2)) if div_rate_num is not None else "N/A",
                 ])
             story.append(_tbl(div_rows, col_widths=[4*cm, 4*cm, 4*cm]))
         story.append(Spacer(1, 0.3*cm))
@@ -688,6 +743,8 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
         source_count = len(web_research.get("sources", []))
         if web_research.get("fallback_used"):
             caption = f"Tavily 未配置或不可用，本页使用 AI 降级整理（来源：{source_name}），仅供参考，请以官方公告为准。"
+        elif web_research.get("structured_without_llm"):
+            caption = f"以下为基于 Tavily 来源的结构化情报摘要（来源：{source_name}，参考来源{source_count}条）；日期未标明的信息仅作背景，请以官方公告为准。"
         else:
             caption = f"以下信息由 Tavily 公开搜索结果整理（来源：{source_name}，参考来源{source_count}条），仅供参考，请以官方公告为准。"
         story.append(Paragraph(

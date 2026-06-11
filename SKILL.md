@@ -58,10 +58,11 @@ Run `python3 scripts/check_env.py` before the first report or when debugging set
 1. Resolve input name/code with `identify_code_type.resolve_input()`.
 2. Identify security type with `DataProvider.identify_security()`.
 3. Fetch market, financial, shareholder, fund-flow, and peer data.
-4. For A-shares, build a deterministic analyst model before calling the LLM.
-5. Build peer-leader context for A-shares when industry peer data is available.
-6. Use Tavily first for latest news and industry dynamics; use the LLM only to summarize search results or explain the deterministic model and peer context.
-7. Generate the PDF with the matching report generator.
+4. Supplement realtime market quotes with free AkShare/efinance fallbacks when enabled.
+5. For A-shares, build a deterministic analyst model before calling the LLM.
+6. Build peer-leader context for A-shares when industry peer data is available.
+7. Use Tavily first for latest news and industry dynamics; use the LLM only to summarize search results or explain the deterministic model and peer context.
+8. Generate the PDF with the matching report generator.
 
 ## Recommendation Rules
 
@@ -75,6 +76,14 @@ For A-share reports, do not ask the LLM to invent a buy/sell call directly. Use 
 - positive evidence, major risks, and review triggers
 
 Use “trading plan” language. Avoid deterministic wording such as “best buy point”, “best sell point”, “guaranteed”, or “must buy”.
+
+For Hong Kong stock reports, use `hk_analyst_model.py` before LLM wording. Include southbound holdings, dividend yield, liquidity, FX risk, and HK price-data availability. If HK daily prices are unavailable, do not create buy/sell price zones.
+
+For ETF reports, use `etf_analyst_model.py`. Treat ETFs as allocation tools, not single-stock trades. Produce allocation rating, trading rating, DCA plan, add conditions, and rebalance/take-profit rules from index valuation, tracking quality, fund size, fees, premium/discount, and realtime liquidity fields when available.
+
+## Free Market Data Fallbacks
+
+`ENABLE_FREE_MARKET_DATA=1` is enabled by default. Keep Tushare-compatible data as the source of truth for fundamentals, financials, holdings, and index valuation. Use AkShare/efinance only to supplement realtime quote fields; use AkShare/yfinance only when Tushare HK/ETF daily bars are unavailable. If these free sources fail, continue the report and mark unavailable fields as `N/A`.
 
 For deeper prompt/report changes, read `references/analyst-framework.md`.
 
@@ -90,9 +99,12 @@ For deeper prompt/report changes, read `references/analyst-framework.md`.
 
 - `run_analysis.py`: unified CLI entry.
 - `analyst_model.py`: professional stock rating and trading-plan model.
+- `hk_analyst_model.py`: Hong Kong stock rating and trading-plan model.
+- `etf_analyst_model.py`: ETF allocation, DCA, and rebalance model.
 - `peer_model.py`: peer leader, valuation anchor, and quality benchmark model.
 - `ai_analysis.py`: LLM prompts and fallback advice.
 - `providers/`: data, LLM, and search adapters.
+- `providers/free_market_data.py`: optional AkShare/efinance realtime and daily fallback helpers.
 - `step4_generate_stock_pdf.py`: A-share report generator.
 - `step5_generate_hk_stock_pdf.py`: Hong Kong stock report generator.
 - `step6_generate_comparison_pdf.py`: multi-security comparison report.

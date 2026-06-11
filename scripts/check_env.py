@@ -27,6 +27,12 @@ REQUIRED_MODULES = [
     ("reportlab", "reportlab"),
     ("numpy", "numpy"),
     ("dotenv", "python-dotenv"),
+    ("akshare", "akshare"),
+]
+
+OPTIONAL_MODULES = [
+    ("efinance", "efinance", "ETF realtime quote first choice; AkShare fallback still works if unavailable"),
+    ("yfinance", "yfinance", "HK daily price fallback after AkShare"),
 ]
 
 
@@ -57,9 +63,16 @@ def check_modules() -> bool:
         try:
             importlib.import_module(module)
             _status(True, f"Python package: {package}")
-        except ImportError:
+        except Exception as exc:
             ok = False
-            _status(False, f"Python package: {package}", f"install with: pip install -r {PROJECT_DIR / 'requirements.txt'}")
+            _status(False, f"Python package: {package}", f"{type(exc).__name__}; install with: pip install -r {PROJECT_DIR / 'requirements.txt'}")
+
+    for module, package, detail in OPTIONAL_MODULES:
+        try:
+            importlib.import_module(module)
+            _status(True, f"Optional package: {package}")
+        except Exception as exc:
+            _warn(f"Optional package: {package}", f"{detail}; current issue: {type(exc).__name__}")
     return ok
 
 

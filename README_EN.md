@@ -43,6 +43,20 @@ The LLM should explain this model output, not override ratings, target prices, o
 
 Peer comparison is also handled by `peer_model.py`, which identifies market-cap leaders, quality benchmarks, and valuation anchors to judge whether the target's discount is an opportunity or a fundamental discount.
 
+Hong Kong stock reports use `hk_analyst_model.py`, adding southbound holdings, liquidity, dividend yield, FX risk, and Hong Kong market-specific trading constraints. If HK daily price data is unavailable, the model does not invent price zones.
+
+ETF reports use `etf_analyst_model.py`. They do not use stock-style buy/sell calls; instead they provide allocation rating, trading rating, DCA plan, add conditions, and rebalance/take-profit rules based on index valuation, tracking error, fund size, fees, and premium/discount.
+
+### Free Market Data Fallbacks
+
+The configured Tushare-compatible API remains the source of truth for financials, holdings, valuation, and fund/index data. Free sources only supplement trading fields:
+
+- A-shares: realtime price, change, turnover, amount, and related quote fields; if the Eastmoney full-market endpoint fails, fall back to a lightweight Tencent single-stock quote.
+- Hong Kong stocks: AkShare realtime quotes for current price; AkShare then yfinance HK daily bars when `hk_daily` is unavailable due to permission or rate limits.
+- ETFs: efinance/AkShare realtime ETF quote fields; AkShare ETF daily bars when fund daily bars are unavailable.
+
+Set `ENABLE_FREE_MARKET_DATA=0` to disable this fallback. Free-source failures do not stop report generation.
+
 ### Switch AI Model
 
 Default: MiniMax. Switch to any OpenAI-compatible service (GPT, DeepSeek, Qwen, etc.):
@@ -136,6 +150,7 @@ securities-analysis-cn/
 ## Data Sources
 
 - **Financial Data**: Tushare API (A-share 21 APIs / HK 9 APIs / ETF), swappable
+- **Free Market Fallbacks**: AkShare / efinance / yfinance for realtime quotes and HK/ETF daily gaps
 - **AI Advice**: MiniMax-M2.7 (default), switchable to OpenAI/DeepSeek/Qwen
 - **Internet Research**: AI knowledge summary (default), switchable to Tavily
 - **Macro News**: CCTV News API (央视新闻联播)

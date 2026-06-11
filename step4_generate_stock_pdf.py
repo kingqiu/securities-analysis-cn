@@ -130,6 +130,12 @@ def _load(json_file):
     if "web_research" in raw:
         d["web_research"] = raw["web_research"]
 
+    if "realtime_quote" in raw and isinstance(raw["realtime_quote"], dict):
+        d["realtime_quote"] = raw["realtime_quote"]
+
+    if "free_market_data" in raw:
+        d["free_market_data"] = raw["free_market_data"]
+
     return d
 
 # ── 计算函数 ──────────────────────────────────────────────────────────────────
@@ -559,6 +565,7 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     audit_df = d.get("audit")
     macro_news_df = d.get("macro_news")
     web_research = d.get("web_research")
+    realtime_quote = d.get("realtime_quote", {})
 
     val   = _latest_valuation(daily_basic)
     fin   = _fin_summary(income_df, fina_df)
@@ -567,6 +574,19 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     bs_quality = _balance_sheet_quality(balance_df, fina_df)
     industry_comp = _industry_comp_valuation(d.get("industry_peers"), val)
     scenario = _scenario_analysis(daily_basic, income_df, val)
+    if scenario and realtime_quote.get("price"):
+        try:
+            realtime_price = round(float(realtime_quote["price"]), 2)
+            old_price = float(scenario.get("cur_price") or 0)
+            if old_price > 0 and realtime_price > 0:
+                scale = realtime_price / old_price
+                scenario["cur_price"] = realtime_price
+                for key in ("price_bull", "price_base", "price_bear"):
+                    if scenario.get(key) not in (None, "N/A"):
+                        scenario[key] = round(float(scenario[key]) * scale, 2)
+                scenario["price_source"] = realtime_quote.get("source", "free_realtime_quote")
+        except (TypeError, ValueError):
+            pass
     peer_view = build_peer_view({
         "name": stock_name,
         "ts_code": d["ts_code"],
@@ -673,6 +693,7 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
         "price_base": scenario.get("price_base", "N/A") if scenario else "N/A",
         "price_bear": scenario.get("price_bear", "N/A") if scenario else "N/A",
         "cur_price": scenario.get("cur_price", "N/A") if scenario else "N/A",
+        "price_source": scenario.get("price_source", "Tushare日线/估值") if scenario else "N/A",
         "forecast_info": forecast_info,
         "peer_context": render_peer_brief(peer_view) if peer_view else "同行龙头数据不足",
     }
@@ -694,7 +715,7 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
         Paragraph("股票深度分析报告", st["subtitle"]),
         Spacer(1, 0.5*cm),
         Paragraph(f"股票代码：{d['ts_code']}　　所属行业：{industry}", st["body"]),
-        Paragraph(f"报告日期：{datetime.now().strftime('%Y年%m月%d日')}　　数据来源：小德法 Tushare API", st["body"]),
+        Paragraph(f"报告日期：{datetime.now().strftime('%Y年%m月%d日')}　　数据来源：小德法 Tushare API + 免费行情兜底", st["body"]),
         PageBreak(),
     ]
 
@@ -706,6 +727,7 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
         ["上市日期", basic.get("list_date",""), "市场", basic.get("market","")],
         ["总市值", f"{val.get('mv_bn','N/A')}亿元", "当前PE(TTM)", str(val.get("pe_ttm","N/A"))],
         ["当前PB", str(val.get("pb","N/A")), "PE历史分位", f"{val.get('pe_percentile','N/A')}%"],
+        ["当前股价", f"{stock_summary.get('cur_price', 'N/A')}元", "价格来源", stock_summary.get("price_source", "Tushare日线/估值")],
     ]
     story.append(_tbl(info_rows, col_widths=[3.5*cm, 5.5*cm, 3.5*cm, 5.5*cm]))
     story.append(Spacer(1, 0.3*cm))
