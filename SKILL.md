@@ -16,6 +16,7 @@ Generate PDF research reports for A-shares, Hong Kong stocks, and listed ETFs.
 Run from the skill directory:
 
 ```bash
+pip install -r requirements.txt
 python3 scripts/check_env.py
 python3 run_analysis.py <name-or-code>
 ```
@@ -53,6 +54,18 @@ Copy `.env.example` to `.env` and configure:
 
 Run `python3 scripts/check_env.py` before the first report or when debugging setup.
 
+## Minimum Demo
+
+After `.env` is configured, these three commands cover the main asset classes:
+
+```bash
+python3 run_analysis.py 贵州茅台
+python3 run_analysis.py 腾讯控股
+python3 run_analysis.py 510300
+```
+
+If a provider permission is missing, keep the report running when possible and mark the affected fields as `N/A`. Do not invent unavailable data.
+
 ## Workflow
 
 1. Resolve input name/code with `identify_code_type.resolve_input()`.
@@ -80,6 +93,16 @@ Use “trading plan” language. Avoid deterministic wording such as “best buy
 For Hong Kong stock reports, use `hk_analyst_model.py` before LLM wording. Include southbound holdings, dividend yield, liquidity, FX risk, and HK price-data availability. If HK daily prices are unavailable, do not create buy/sell price zones.
 
 For ETF reports, use `etf_analyst_model.py`. Treat ETFs as allocation tools, not single-stock trades. Produce allocation rating, trading rating, DCA plan, add conditions, and rebalance/take-profit rules from index valuation, tracking quality, fund size, fees, premium/discount, and realtime liquidity fields when available.
+
+For A-share trading plans, include support/resistance, moving-average state, volatility, volume confirmation, review stop, and risk-profile position sizing. Price zones are a plan for review, not a promise of best entry or exit.
+
+For peer comparison, explain the selection logic. Use industry peers to identify market-cap leaders, quality leaders, and valuation anchors; compare valuation, profitability, growth, ROE/cash-flow quality, and risk exposures when the data exists.
+
+## Data Permission Notes
+
+- A-share core reports need daily bars, daily valuation, income/balance/cash-flow/fina indicators, shareholder and peer data.
+- HK reports can deepen when `hk_hold`/southbound, HK financial indicators, and HK daily bars are available. ADR spread and buyback details are currently only surfaced as data-gap notes unless a structured source is added.
+- ETF reports need NAV, fund daily bars, index daily bars, fund share, index valuation, and index weights. Industry weights require a future constituent-industry mapping source; until then, use top holding/concentration analysis.
 
 ## Free Market Data Fallbacks
 

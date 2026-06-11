@@ -88,6 +88,12 @@ def build_stock_research_view(summary_data: dict) -> dict:
     price_bull = _safe_float(summary_data.get("price_bull"))
     price_base = _safe_float(summary_data.get("price_base"))
     price_bear = _safe_float(summary_data.get("price_bear"))
+    support_20d = _safe_float(summary_data.get("support_20d"))
+    support_60d = _safe_float(summary_data.get("support_60d"))
+    resistance_20d = _safe_float(summary_data.get("resistance_20d"))
+    resistance_60d = _safe_float(summary_data.get("resistance_60d"))
+    volatility_60d = _safe_float(summary_data.get("volatility_60d"))
+    volume_ratio = _safe_float(summary_data.get("volume_ratio"))
 
     base_upside = None
     bull_upside = None
@@ -298,6 +304,33 @@ def build_stock_research_view(summary_data: dict) -> dict:
         action = "关键价格数据不足，建议先以基本面跟踪和小仓位观察为主。"
         position_plan = "关键价格区间缺失，不建议制定明确仓位上限。"
 
+    trading_rules = []
+    if cur_price and support_20d and support_60d:
+        main_support = max(support_20d, support_60d)
+        trading_rules.append(f"支撑观察：近20/60日支撑约{support_20d:.2f}/{support_60d:.2f}元，若回踩支撑并缩量企稳，可作为低吸观察点。")
+        if cur_price < main_support:
+            trading_rules.append("价格已跌破主要支撑，买入计划应暂停，先等待重新站回支撑区。")
+    if resistance_20d and resistance_60d:
+        trading_rules.append(f"阻力观察：近20/60日压力约{resistance_20d:.2f}/{resistance_60d:.2f}元，放量突破后才提高追随仓位。")
+    if volume_ratio is not None:
+        if volume_ratio >= 1.5:
+            trading_rules.append(f"成交确认：最新成交量约为20日均量{volume_ratio:.2f}倍，若价格同步突破阻力，趋势确认度提高。")
+        elif volume_ratio <= 0.7:
+            trading_rules.append(f"成交确认：最新成交量仅为20日均量{volume_ratio:.2f}倍，反弹若无量能配合，追高需谨慎。")
+    if volatility_60d is not None:
+        if volatility_60d >= 35:
+            trading_rules.append(f"波动约束：近60日年化波动率约{volatility_60d:.1f}%，单次建仓不宜超过计划仓位的25%。")
+        else:
+            trading_rules.append(f"波动约束：近60日年化波动率约{volatility_60d:.1f}%，可按分批节奏执行。")
+    if stop_loss is not None:
+        trading_rules.append(f"止损复盘：有效跌破{stop_loss:.2f}元后，不机械补仓，先复核业绩、估值和行业假设。")
+
+    position_ladder = [
+        "稳健型：只在买入区下沿或支撑企稳时建仓，单票仓位建议不超过计划权益仓的30%-40%。",
+        "平衡型：买入区内分2-3笔建仓，突破阻力且基本面未变坏时再加至60%-70%。",
+        "进取型：允许小仓位提前试错，但必须以止损位和量能确认作为加减仓纪律。",
+    ]
+
     positives = []
     for group in (valuation, quality, growth, market):
         positives.extend([item["evidence"] for item in group if item["score"] > 0])
@@ -345,6 +378,8 @@ def build_stock_research_view(summary_data: dict) -> dict:
         "positives": positives[:5],
         "risks": risks[:5],
         "watchpoints": watchpoints[:5],
+        "trading_rules": trading_rules[:6],
+        "position_ladder": position_ladder,
         "score_detail": {
             "valuation": valuation,
             "quality": quality,
@@ -381,4 +416,10 @@ def render_stock_research_brief(view: dict) -> str:
     lines.extend([f"- {item}" for item in view.get("risks", [])])
     lines.append("后续复盘触发器：")
     lines.extend([f"- {item}" for item in view.get("watchpoints", [])])
+    if view.get("trading_rules"):
+        lines.append("买入/卖出纪律：")
+        lines.extend([f"- {item}" for item in view.get("trading_rules", [])])
+    if view.get("position_ladder"):
+        lines.append("不同风险偏好的仓位纪律：")
+        lines.extend([f"- {item}" for item in view.get("position_ladder", [])])
     return "\n".join(lines)

@@ -40,9 +40,16 @@ def build_etf_research_view(summary: dict) -> dict:
     change_pct = _f(summary.get("change_pct"))
     turnover_rate = _f(summary.get("turnover_rate"))
     amount = _f(summary.get("amount"))
+    tracking_bias = _f(summary.get("tracking_bias"))
+    premium_pct = _f(summary.get("premium_pct"))
+    net_flow_20d = _f(summary.get("net_flow_20d"))
+    net_flow_60d = _f(summary.get("net_flow_60d"))
+    top10_weight = _f(summary.get("top10_weight"))
+    top20_weight = _f(summary.get("top20_weight"))
     flow_trend = summary.get("flow_trend", "未知")
     aum_trend = summary.get("aum_trend", "未知")
     ma_position = summary.get("ma_position", "未知")
+    industry_weight_status = summary.get("industry_weight_status", "缺少行业映射")
 
     allocation = 0
     trading = 0
@@ -70,6 +77,8 @@ def build_etf_research_view(summary: dict) -> dict:
         elif tracking_error >= 5:
             allocation -= 1
             risks.append(f"年化跟踪误差{tracking_error:.2f}%，跟踪质量需复核")
+    if tracking_bias is not None and abs(tracking_bias) >= 0.05:
+        risks.append(f"日均跟踪偏差约{tracking_bias:.3f}%，需观察是否存在持续系统性偏离")
 
     if total_fee is not None:
         if total_fee <= 0.6:
@@ -91,11 +100,15 @@ def build_etf_research_view(summary: dict) -> dict:
     if premium is not None:
         if abs(premium) <= 0.3:
             trading += 1
+            notes.append(f"当前溢折率约{premium:.2f}%，场内价格与净值偏离较小")
         elif premium > 1:
             trading -= 1
             risks.append(f"场内溢价约{premium:.2f}%，不适合追价买入")
         elif premium < -1:
             notes.append(f"场内折价约{abs(premium):.2f}%，可关注折价收敛机会")
+    if premium_pct is not None and premium_pct >= 85:
+        trading -= 1
+        risks.append(f"溢折率处于近一年{premium_pct:.1f}%分位，场内买入需防溢价回落")
 
     if change_pct is not None:
         if change_pct >= 3 and val_pct and val_pct >= 60:
@@ -124,6 +137,19 @@ def build_etf_research_view(summary: dict) -> dict:
     elif flow_trend == "净赎回" and aum_trend == "缩减":
         trading -= 1
         risks.append("份额和规模收缩，短期资金关注度偏弱")
+    if net_flow_20d is not None:
+        notes.append(f"近20日份额变化约{net_flow_20d:.2f}万份，近60日约{net_flow_60d:.2f}万份" if net_flow_60d is not None else f"近20日份额变化约{net_flow_20d:.2f}万份")
+
+    concentration_note = None
+    if top10_weight is not None:
+        if top10_weight >= 50:
+            risks.append(f"指数前十大权重约{top10_weight:.1f}%，集中度较高，需关注龙头股单一风险")
+        elif top10_weight >= 30:
+            concentration_note = f"指数前十大权重约{top10_weight:.1f}%，集中度中等"
+        else:
+            concentration_note = f"指数前十大权重约{top10_weight:.1f}%，成分分散度较好"
+        if concentration_note:
+            notes.append(concentration_note)
 
     if ret_1y is not None and ret_1y > 25 and val_pct and val_pct > 60:
         trading -= 1
@@ -154,6 +180,12 @@ def build_etf_research_view(summary: dict) -> dict:
     if not risks:
         risks.append("ETF仍承担标的指数系统性波动风险")
 
+    strategy_fit = {
+        "定投": "适合" if allocation >= 2 and (val_pct is None or val_pct <= 70) else "谨慎",
+        "波段": "适合" if trading >= 2 and premium is not None and abs(premium) <= 0.5 else "等待信号",
+        "资产配置": "适合" if etf_type == "宽基/核心指数" and allocation >= 0 else "卫星配置",
+    }
+
     return {
         "etf_type": etf_type,
         "allocation_score": allocation,
@@ -164,6 +196,15 @@ def build_etf_research_view(summary: dict) -> dict:
         "change_pct": change_pct,
         "turnover_rate": turnover_rate,
         "amount": amount,
+        "tracking_bias": tracking_bias,
+        "premium": premium,
+        "premium_pct": premium_pct,
+        "net_flow_20d": net_flow_20d,
+        "net_flow_60d": net_flow_60d,
+        "top10_weight": top10_weight,
+        "top20_weight": top20_weight,
+        "industry_weight_status": industry_weight_status,
+        "strategy_fit": strategy_fit,
         "dca_plan": "适合用定投/分批方式建仓，估值分位越低可提高单期投入；估值进入高分位后转为再平衡。",
         "add_condition": "估值分位低于30%、溢价率接近0且份额不持续萎缩时，可考虑加仓。",
         "rebalance_condition": "估值分位高于80%、短期涨幅过快或场内溢价超过1%时，考虑止盈或再平衡。",
@@ -188,6 +229,8 @@ def render_etf_research_brief(view: dict) -> str:
         f"- 定投计划：{view.get('dca_plan')}",
         f"- 加仓条件：{view.get('add_condition')}",
         f"- 止盈/再平衡：{view.get('rebalance_condition')}",
+        f"- 策略适配：定投={view.get('strategy_fit', {}).get('定投')}；波段={view.get('strategy_fit', {}).get('波段')}；资产配置={view.get('strategy_fit', {}).get('资产配置')}",
+        f"- 成分集中度：前十大{view.get('top10_weight', 'N/A')}%，前二十大{view.get('top20_weight', 'N/A')}%；行业权重状态：{view.get('industry_weight_status')}",
         "核心依据：",
     ])
     lines.extend([f"  - {x}" for x in view.get("notes", [])])

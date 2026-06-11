@@ -346,6 +346,22 @@ def _calc_premium_discount(nav_df, daily_df):
         "avg_premium": round(merged["premium_rate"].mean(), 2),
     }
 
+
+def _index_concentration(index_weight_df):
+    if index_weight_df is None or index_weight_df.empty or "weight" not in index_weight_df.columns:
+        return {}
+    df = index_weight_df.copy()
+    df["weight"] = pd.to_numeric(df["weight"], errors="coerce")
+    df = df.dropna(subset=["weight"]).sort_values("weight", ascending=False)
+    if df.empty:
+        return {}
+    return {
+        "top10_weight": round(df.head(10)["weight"].sum(), 2),
+        "top20_weight": round(df.head(20)["weight"].sum(), 2),
+        "top_count": len(df),
+        "industry_weight_status": "当前数据源仅含成分代码和权重，缺少行业映射；本报告先用成分集中度替代行业权重风险观察",
+    }
+
 # ── 图表生成 ──────────────────────────────────────────────────────────────────
 
 def _nav_chart(nav_df, fund_name):
@@ -404,6 +420,7 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     manager_df   = d.get("manager")
     sales_vol_df = d.get("sales_vol")
     index_dailybasic_df = d.get("index_dailybasic")
+    index_weight_df = d.get("index_weight")
     realtime_quote = d.get("realtime_quote", {})
 
     returns = _calc_returns(nav_df)
@@ -414,6 +431,7 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     te_decomp = _decompose_tracking_diff(daily_df, index_df)
     index_val = _index_valuation_percentile(index_dailybasic_df)
     premium_disc = _calc_premium_discount(nav_df, daily_df)
+    concentration = _index_concentration(index_weight_df)
 
     m_fee = float(basic.get("m_fee") or 0)
     c_fee = float(basic.get("c_fee") or 0)
@@ -450,6 +468,7 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         "ret_1y": returns.get("1Y", "N/A"),
         "similar_rank": similar_rank,
         "tracking_error": te.get("te", "N/A"),
+        "tracking_bias": te.get("avg", "N/A"),
         "total_fee": total_fee,
         "aum": aum_bn,
         "aum_trend": aum_trend,
@@ -461,6 +480,11 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         "premium": premium_disc.get("current_premium", "N/A") if premium_disc else "N/A",
         "premium_pct": premium_disc.get("premium_percentile", "N/A") if premium_disc else "N/A",
         "flow_trend": flow_metrics.get("trend_20d", "未知") if flow_metrics else "未知",
+        "net_flow_20d": flow_metrics.get("net_flow_20d", "N/A") if flow_metrics else "N/A",
+        "net_flow_60d": flow_metrics.get("net_flow_60d", "N/A") if flow_metrics else "N/A",
+        "top10_weight": concentration.get("top10_weight", "N/A"),
+        "top20_weight": concentration.get("top20_weight", "N/A"),
+        "industry_weight_status": concentration.get("industry_weight_status", "缺少行业映射"),
         "current_price": realtime_quote.get("price", "N/A"),
         "change_pct": realtime_quote.get("change_pct", "N/A"),
         "turnover_rate": realtime_quote.get("turnover_rate", "N/A"),
@@ -518,6 +542,20 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     ]
     story.append(_tbl(plan_rows, col_widths=[3.5*cm, 12.5*cm]))
     story.append(Spacer(1, 0.2*cm))
+
+    pro_rows = [
+        ["专业维度", "当前读数", "解读"],
+        ["跟踪误差", f"{etf_summary.get('tracking_error')}% / 日均偏差{etf_summary.get('tracking_bias')}%", "越低说明跟踪指数越稳定，持续偏差需复核现金拖累、费用和复制误差"],
+        ["溢价/折价", f"{etf_summary.get('premium')}%（分位{etf_summary.get('premium_pct')}%）", "高溢价不追买，折价需结合流动性和申赎机制判断"],
+        ["份额变化", f"20日{etf_summary.get('net_flow_20d')}万份；60日{etf_summary.get('net_flow_60d')}万份", "份额扩张代表资金配置热度改善，持续赎回需警惕流动性下降"],
+        ["成分集中度", f"Top10 {etf_summary.get('top10_weight')}%；Top20 {etf_summary.get('top20_weight')}%", "集中度越高，龙头股或单一行业波动对ETF影响越大"],
+        ["行业权重", etf_summary.get("industry_weight_status"), "后续可接入成分股行业映射后输出行业暴露矩阵"],
+        ["策略适配", f"定投{etf_view.get('strategy_fit', {}).get('定投')}；波段{etf_view.get('strategy_fit', {}).get('波段')}；资产配置{etf_view.get('strategy_fit', {}).get('资产配置')}", "不同投资目的对应不同买入纪律和仓位上限"],
+    ]
+    story.append(Paragraph("ETF专业诊断", st["h2"]))
+    story.append(_tbl(pro_rows, col_widths=[3*cm, 5*cm, 8*cm]))
+    story.append(Spacer(1, 0.2*cm))
+
     story.extend(md_to_story(etf_brief, st["body"], table_builder=_tbl))
     story.append(Spacer(1, 0.2*cm))
     story.append(Paragraph("AI 解读", st["h2"]))
@@ -570,6 +608,12 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
             ratio = row.get("stk_mkv_ratio", 0)
             hold_rows.append([code, name, f"{ratio:.2f}%"])
         story.append(_tbl(hold_rows, col_widths=[3.5*cm, 8*cm, 3.5*cm]))
+        if concentration:
+            story.append(Spacer(1, 0.2*cm))
+            story.append(Paragraph(
+                f"指数成分集中度：前十大权重合计{concentration.get('top10_weight','N/A')}%，前二十大权重合计{concentration.get('top20_weight','N/A')}%。{concentration.get('industry_weight_status','')}",
+                st["caption"]
+            ))
     else:
         story.append(Paragraph("持仓数据暂不可用", st["body"]))
     story.append(Spacer(1, 0.3*cm))

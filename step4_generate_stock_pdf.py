@@ -332,6 +332,33 @@ def _industry_comp_valuation(industry_peers, val):
     return result
 
 
+def _trading_discipline(daily_df):
+    if daily_df is None or daily_df.empty:
+        return {}
+    df = daily_df.sort_values("trade_date").copy()
+    for col in ("close", "high", "low", "vol"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    recent20 = df.tail(20)
+    recent60 = df.tail(60)
+    result = {}
+    if not recent20.empty:
+        result["support_20d"] = round(float(recent20["low"].min()), 2) if "low" in recent20 else None
+        result["resistance_20d"] = round(float(recent20["high"].max()), 2) if "high" in recent20 else None
+    if not recent60.empty:
+        result["support_60d"] = round(float(recent60["low"].min()), 2) if "low" in recent60 else None
+        result["resistance_60d"] = round(float(recent60["high"].max()), 2) if "high" in recent60 else None
+        if "close" in recent60:
+            ret = recent60["close"].pct_change().dropna()
+            if not ret.empty:
+                result["volatility_60d"] = round(float(ret.std() * np.sqrt(250) * 100), 2)
+    if "vol" in df.columns and len(df.dropna(subset=["vol"])) >= 20:
+        avg20 = df["vol"].tail(20).mean()
+        latest = df["vol"].iloc[-1]
+        result["volume_ratio"] = round(float(latest / avg20), 2) if avg20 else None
+    return result
+
+
 def _scenario_analysis(daily_basic_df, income_df, val):
     """三情景分析：基于历史 PE 区间 + 历史增速区间"""
     if daily_basic_df is None or daily_basic_df.empty:
@@ -574,6 +601,7 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     bs_quality = _balance_sheet_quality(balance_df, fina_df)
     industry_comp = _industry_comp_valuation(d.get("industry_peers"), val)
     scenario = _scenario_analysis(daily_basic, income_df, val)
+    trading_disc = _trading_discipline(daily_df)
     if scenario and realtime_quote.get("price"):
         try:
             realtime_price = round(float(realtime_quote["price"]), 2)
@@ -696,6 +724,12 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
         "price_source": scenario.get("price_source", "Tushare日线/估值") if scenario else "N/A",
         "forecast_info": forecast_info,
         "peer_context": render_peer_brief(peer_view) if peer_view else "同行龙头数据不足",
+        "support_20d": trading_disc.get("support_20d", "N/A"),
+        "support_60d": trading_disc.get("support_60d", "N/A"),
+        "resistance_20d": trading_disc.get("resistance_20d", "N/A"),
+        "resistance_60d": trading_disc.get("resistance_60d", "N/A"),
+        "volatility_60d": trading_disc.get("volatility_60d", "N/A"),
+        "volume_ratio": trading_disc.get("volume_ratio", "N/A"),
     }
     analyst_view = build_stock_research_view(stock_summary)
     analyst_brief = render_stock_research_brief(analyst_view)

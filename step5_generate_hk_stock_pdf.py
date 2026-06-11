@@ -471,6 +471,84 @@ def _revenue_chart(income_df, stock_name, rev_col, profit_col):
     fig.tight_layout()
     return _chart_to_image(fig)
 
+
+def _hk_liquidity_analysis(daily_df):
+    if daily_df is None or daily_df.empty:
+        return {"avg_volume": None, "avg_turnover_hkd": None, "level": "未知", "note": "缺少港股日线数据，无法评估流动性"}
+
+    recent = daily_df.copy().tail(20)
+    close = pd.to_numeric(recent.get("close"), errors="coerce") if "close" in recent.columns else pd.Series(dtype=float)
+    vol = pd.to_numeric(recent.get("vol"), errors="coerce") if "vol" in recent.columns else pd.Series(dtype=float)
+    amount = pd.to_numeric(recent.get("amount"), errors="coerce") if "amount" in recent.columns else pd.Series(dtype=float)
+
+    avg_volume = float(vol.dropna().mean()) if not vol.dropna().empty else None
+    avg_amount = float(amount.dropna().mean()) if not amount.dropna().empty else None
+    if avg_amount is None and avg_volume is not None and not close.dropna().empty:
+        avg_amount = float(avg_volume * close.dropna().mean())
+
+    if avg_amount is None:
+        level = "未知"
+        note = "缺少成交额字段，暂不能量化交易冲击成本"
+    elif avg_amount >= 500_000_000:
+        level = "较好"
+        note = f"近20日成交额估算约{avg_amount/100_000_000:.1f}亿港元/日，流动性较好"
+    elif avg_amount >= 50_000_000:
+        level = "中等"
+        note = f"近20日成交额估算约{avg_amount/100_000_000:.1f}亿港元/日，大额交易仍需控制节奏"
+    else:
+        level = "偏弱"
+        note = f"近20日成交额估算约{avg_amount/100_000_000:.2f}亿港元/日，滑点和流动性折价需重点关注"
+
+    return {
+        "avg_volume": round(avg_volume, 0) if avg_volume is not None else None,
+        "avg_turnover_hkd": round(avg_amount, 0) if avg_amount is not None else None,
+        "level": level,
+        "note": note,
+    }
+
+
+def _hk_market_profile(stock_name, ts_code, fina_df, web_research):
+    text = f"{stock_name} {ts_code}"
+    adr_map = {
+        "00700.HK": "TCEHY/TCTZF",
+        "09988.HK": "BABA",
+        "03690.HK": "MPNGY",
+        "09618.HK": "JD",
+        "09888.HK": "BIDU",
+        "01024.HK": "KUAISHOU",
+        "09999.HK": "NTES",
+    }
+    segments = []
+    regulatory = "未知"
+    if any(k in text for k in ("腾讯", "00700")):
+        segments = ["游戏版号与海外游戏", "微信/视频号广告", "金融科技与支付合规", "云与企业服务", "AI投入与资本开支"]
+        regulatory = "高：互联网平台、游戏、数据合规和金融科技监管均会影响估值"
+    elif any(k in text for k in ("阿里", "09988")):
+        segments = ["电商GMV与货币化率", "云计算", "本地生活", "国际业务", "股东回报"]
+        regulatory = "高：平台经济、数据合规和跨境上市监管敏感"
+    elif any(k in text for k in ("美团", "03690")):
+        segments = ["即时零售", "到店酒旅", "外卖补贴强度", "新业务亏损", "骑手与平台监管"]
+        regulatory = "高：平台用工、反垄断和本地生活竞争影响估值"
+
+    currency = "HKD"
+    if fina_df is not None and not fina_df.empty and "currency" in fina_df.columns:
+        values = fina_df["currency"].dropna().astype(str)
+        if not values.empty:
+            currency = values.iloc[-1]
+
+    research_text = ""
+    if web_research and web_research.get("sections"):
+        research_text = "\n".join(str(v) for v in web_research["sections"].values())
+    buyback_signal = "有回购线索" if "回购" in research_text else "未见明确回购线索"
+
+    return {
+        "adr_ticker": adr_map.get(ts_code, ""),
+        "business_segments": segments,
+        "regulatory_sensitivity": regulatory,
+        "currency": currency,
+        "buyback_signal": buyback_signal,
+    }
+
 # ── 主函数 ────────────────────────────────────────────────────────────────────
 
 def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
@@ -505,6 +583,8 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
     ma_pos = _ma_position(daily_df)
     cf_quality = _cashflow_quality(cashflow_df, income_df)
     sb_analysis = _southbound_analysis(hold_df)
+    liquidity = _hk_liquidity_analysis(daily_df)
+    hk_profile = _hk_market_profile(stock_name, d["ts_code"], fina_df, web_research)
 
     dividend_rate = None
     if fina_df is not None and not fina_df.empty and "dividend_rate" in fina_df.columns:
@@ -532,6 +612,13 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
         "cur_price": val.get("cur_price", "N/A"),
         "price_source": val.get("price_source", "Tushare日线"),
         "dividend_rate": dividend_rate if dividend_rate is not None else "N/A",
+        "avg_turnover_hkd": liquidity.get("avg_turnover_hkd"),
+        "avg_volume": liquidity.get("avg_volume"),
+        "currency": hk_profile.get("currency", "HKD"),
+        "adr_ticker": hk_profile.get("adr_ticker", ""),
+        "business_segments": hk_profile.get("business_segments", []),
+        "regulatory_sensitivity": hk_profile.get("regulatory_sensitivity", "未知"),
+        "buyback_signal": hk_profile.get("buyback_signal", "未知"),
     }
     hk_view = build_hk_research_view(hk_summary)
     hk_brief = render_hk_research_brief(hk_view)
@@ -597,8 +684,24 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
     story.extend(md_to_story(advice_text, st["body"], table_builder=_tbl))
     story.append(Spacer(1, 0.3*cm))
 
-    # ── 三、股价与均线 ──
-    story.append(Paragraph("三、股价走势", st["h1"]))
+    # ── 三、港股特有因素 ──
+    story.append(Paragraph("三、港股特有因素分析", st["h1"]))
+    hk_factor_rows = [
+        ["维度", "结论", "投研含义"],
+        ["南向资金", f"{sb_analysis.get('latest_ratio', 'N/A')}% / {sb_analysis.get('trend', '未知')}", "内地资金定价权与短期风险偏好观察指标"],
+        ["流动性", liquidity.get("level", "未知"), liquidity.get("note", "N/A")],
+        ["交易/报表币种", hk_profile.get("currency", "HKD"), "内地投资者实际收益受人民币/港元汇率影响"],
+        ["ADR/美股映射", hk_profile.get("adr_ticker") or "未识别", "当前未接入ADR实时价差，仅作为跨市场估值锚提示"],
+        ["股东回报", f"股息率 {dividend_rate if dividend_rate is not None else 'N/A'}%；{hk_profile.get('buyback_signal')}", "分红和回购可缓冲港股流动性折价"],
+        ["监管敏感度", hk_profile.get("regulatory_sensitivity", "未知"), "监管边际变化可能影响估值中枢"],
+    ]
+    story.append(_tbl(hk_factor_rows, col_widths=[3*cm, 5*cm, 8*cm]))
+    if hk_profile.get("business_segments"):
+        story.append(Paragraph("重点业务拆分关注：" + "、".join(hk_profile["business_segments"]), st["body"]))
+    story.append(Spacer(1, 0.3*cm))
+
+    # ── 四、股价与均线 ──
+    story.append(Paragraph("四、股价走势", st["h1"]))
     if daily_df is not None and not daily_df.empty:
         story.append(_price_chart(daily_df, stock_name))
         story.append(Paragraph("图：近1年股价走势（含MA20/MA60均线）", st["caption"]))
@@ -607,8 +710,8 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
         story.append(Paragraph("日线数据暂不可用", st["body"]))
     story.append(Spacer(1, 0.3*cm))
 
-    # ── 四、业绩分析 ──
-    story.append(Paragraph("四、业绩分析", st["h1"]))
+    # ── 五、业绩分析 ──
+    story.append(Paragraph("五、业绩分析", st["h1"]))
     rev_col = fin.get("rev_col")
     profit_col = fin.get("profit_col")
     if income_df is not None and not income_df.empty:
@@ -628,8 +731,8 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
     story.append(_tbl(fin_rows, col_widths=[6*cm, 6*cm]))
     story.append(Spacer(1, 0.3*cm))
 
-    # ── 五、财务健康度 ──
-    story.append(Paragraph("五、财务健康度", st["h1"]))
+    # ── 六、财务健康度 ──
+    story.append(Paragraph("六、财务健康度", st["h1"]))
     roe_val = fin.get("roe")
     debt_val = fin.get("debt_ratio")
     gm_val = fin.get("gross_margin")
@@ -646,7 +749,7 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
 
     # ── 六、现金流质量 ──
     if cf_quality:
-        story.append(Paragraph("六、现金流质量", st["h1"]))
+        story.append(Paragraph("七、现金流质量", st["h1"]))
         ocf_sales = cf_quality.get("ocf_sales")
         if ocf_sales is not None:
             label = "健康（>0.15）" if ocf_sales > 0.15 else "偏弱（≤0.15）"
@@ -662,8 +765,8 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
             story.append(_tbl(cf_rows, col_widths=[5*cm, 5*cm]))
         story.append(Spacer(1, 0.3*cm))
 
-    # ── 七、南向资金持仓分析 ──
-    story.append(Paragraph("七、南向资金持仓分析", st["h1"]))
+    # ── 八、南向资金持仓分析 ──
+    story.append(Paragraph("八、南向资金持仓分析", st["h1"]))
     if sb_analysis and sb_analysis.get("latest_ratio") is not None:
         story.append(Paragraph(
             f"最新南向资金持仓比例：{sb_analysis['latest_ratio']}%　　近期趋势：{sb_analysis.get('trend', '未知')}",
@@ -693,7 +796,7 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
     # ── 八、财务指标趋势 ──
     if fina_df is not None and not fina_df.empty:
         story.append(PageBreak())
-        story.append(Paragraph("八、核心财务指标趋势", st["h1"]))
+        story.append(Paragraph("九、核心财务指标趋势", st["h1"]))
         fi = fina_df.copy()
         if "end_date" in fi.columns:
             fi["end_date"] = fi["end_date"].astype(str)
@@ -735,10 +838,10 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
             story.append(_tbl(div_rows, col_widths=[4*cm, 4*cm, 4*cm]))
         story.append(Spacer(1, 0.3*cm))
 
-    # ── 九、互联网研究（公司近期事件/行业/机构观点） ──
+    # ── 十、互联网研究（公司近期事件/行业/机构观点） ──
     if web_research and web_research.get("sections"):
         story.append(PageBreak())
-        story.append(Paragraph("九、公司研究与行业动态", st["h1"]))
+        story.append(Paragraph("十、公司研究与行业动态", st["h1"]))
         source_name = web_research.get("source", "公开搜索")
         source_count = len(web_research.get("sources", []))
         if web_research.get("fallback_used"):
