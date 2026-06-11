@@ -30,6 +30,15 @@ from reportlab.pdfbase.ttfonts import TTFont
 from ai_analysis import get_investment_advice
 from config import md_to_rl, md_to_story
 from etf_analyst_model import build_etf_research_view, render_etf_research_brief
+from pdf_design import (
+    CN_FONT as SHARED_CN_FONT,
+    add_cover,
+    build_styles,
+    callout_box,
+    draw_report_footer,
+    metric_cards,
+    styled_table,
+)
 
 # ── 字体注册 ──────────────────────────────────────────────────────────────────
 
@@ -49,42 +58,17 @@ def _register_fonts():
                 continue
     return "Helvetica"
 
-CN_FONT = _register_fonts()
+CN_FONT = SHARED_CN_FONT
 
 # ── 样式 ──────────────────────────────────────────────────────────────────────
 
 def _styles():
-    def s(name, **kw):
-        return ParagraphStyle(name, fontName=CN_FONT, **kw)
-
-    return {
-        "title":    s("T",  fontSize=22, leading=28, alignment=TA_CENTER, spaceAfter=6),
-        "subtitle": s("ST", fontSize=14, leading=20, alignment=TA_CENTER, spaceAfter=4, textColor=colors.HexColor("#555555")),
-        "h1":       s("H1", fontSize=14, leading=20, spaceBefore=14, spaceAfter=6, textColor=colors.HexColor("#1a3a6b")),
-        "h2":       s("H2", fontSize=12, leading=16, spaceBefore=8,  spaceAfter=4, textColor=colors.HexColor("#2c5f9e")),
-        "body":     s("B",  fontSize=10, leading=15, spaceAfter=4, alignment=TA_JUSTIFY),
-        "caption":  s("C",  fontSize=8,  leading=12, textColor=colors.grey, alignment=TA_CENTER),
-        "advice":   s("A",  fontSize=10, leading=16, spaceAfter=4),
-    }
+    return build_styles("etf")
 
 # ── 工具函数 ──────────────────────────────────────────────────────────────────
 
 def _tbl(data, col_widths=None, header_bg="#1a3a6b"):
-    style = TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(header_bg)),
-        ("TEXTCOLOR",  (0, 0), (-1, 0), colors.white),
-        ("FONTNAME",   (0, 0), (-1, -1), CN_FONT),
-        ("FONTSIZE",   (0, 0), (-1, -1), 9),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f8ff")]),
-        ("GRID",       (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
-        ("ALIGN",      (0, 0), (-1, -1), "CENTER"),
-        ("VALIGN",     (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-    ])
-    t = Table(data, colWidths=col_widths, repeatRows=1)
-    t.setStyle(style)
-    return t
+    return styled_table(data, col_widths=col_widths, kind="etf")
 
 
 def _chart_to_image(fig, width=14*cm):
@@ -504,15 +488,27 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     story = []
 
     # ── 封面 ──
-    story += [
-        Spacer(1, 3*cm),
-        Paragraph(fund_name, st["title"]),
-        Paragraph("ETF 深度分析报告", st["subtitle"]),
-        Spacer(1, 0.5*cm),
-        Paragraph(f"基金代码：{d['ts_code']}　　跟踪指数：{d['index_code']}", st["body"]),
-        Paragraph(f"报告日期：{datetime.now().strftime('%Y年%m月%d日')}　　数据来源：小德法 Tushare API + 免费行情兜底", st["body"]),
-        PageBreak(),
-    ]
+    add_cover(
+        story,
+        fund_name,
+        "ETF 深度分析报告",
+        [
+            ["基金代码", d["ts_code"]],
+            ["跟踪指数", d["index_code"]],
+            ["报告日期", datetime.now().strftime("%Y年%m月%d日")],
+        ],
+        kind="etf",
+        highlights=[
+            ["配置评级", str(etf_view.get("allocation_rating", "N/A")), f"配置分 {etf_view.get('allocation_score', 'N/A')}"],
+            ["交易评级", str(etf_view.get("trading_rating", "N/A")), f"交易分 {etf_view.get('trading_score', 'N/A')}"],
+            ["综合费率", f"{total_fee}%/年", f"规模 {aum_bn}亿元"],
+        ],
+        notes=[
+            ["核心结论", f"综合费率{total_fee}%/年、规模{aum_bn}亿元；跟踪误差{etf_summary.get('tracking_error')}%，配置价值取决于指数估值与流动性。"],
+            ["关注变量", "指数估值、跟踪误差、溢价折价、规模流动性、费率和份额变化。"],
+            ["主要风险", "指数系统性下跌、跟踪偏差扩大、流动性下降及高溢价买入风险。"],
+        ],
+    )
 
     # ── 一、投资摘要 ──
     story.append(Paragraph("一、投资摘要", st["h1"]))
@@ -526,10 +522,16 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     ]
     story.append(_tbl(info_rows, col_widths=[3.5*cm, 5.5*cm, 3.5*cm, 5.5*cm]))
     story.append(Spacer(1, 0.3*cm))
+    story.append(metric_cards([
+        ["跟踪误差", f"{etf_summary.get('tracking_error')}%", "年化口径"],
+        ["溢价/折价", f"{etf_summary.get('premium')}%", f"分位 {etf_summary.get('premium_pct')}%"],
+        ["近60日份额", f"{etf_summary.get('net_flow_60d')}万份", "资金申赎趋势"],
+    ], kind="etf"))
+    story.append(Spacer(1, 0.3*cm))
 
     # ── 二、配置与交易计划 ──
     story.append(Paragraph("二、ETF配置与交易计划", st["h1"]))
-    story.append(Paragraph("以下结论由 ETF 配置模型先生成，重点关注指数估值、跟踪质量、规模流动性、费率和溢价折价；仅供研究参考。", st["caption"]))
+    story.append(callout_box("以下结论由 ETF 配置模型先生成，重点关注指数估值、跟踪质量、规模流动性、费率和溢价折价；仅供研究参考。", kind="etf"))
     story.append(Spacer(1, 0.2*cm))
     plan_rows = [
         ["事项", "模型结论"],
@@ -757,7 +759,11 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     for r in risks:
         story.append(Paragraph(f"• {r}", st["body"]))
 
-    doc.build(story)
+    doc.build(
+        story,
+        onFirstPage=lambda canvas, doc_obj: draw_report_footer(canvas, doc_obj, "etf"),
+        onLaterPages=lambda canvas, doc_obj: draw_report_footer(canvas, doc_obj, "etf"),
+    )
     print(f"\n✓ PDF 报告已生成：{output_path}")
 
 

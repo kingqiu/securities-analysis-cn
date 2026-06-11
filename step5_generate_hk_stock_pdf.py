@@ -30,6 +30,15 @@ from reportlab.pdfbase.ttfonts import TTFont
 from ai_analysis import get_investment_advice, get_industry_news
 from config import md_to_rl, md_to_story
 from hk_analyst_model import build_hk_research_view, render_hk_research_brief
+from pdf_design import (
+    CN_FONT as SHARED_CN_FONT,
+    add_cover,
+    build_styles,
+    callout_box,
+    draw_report_footer,
+    metric_cards,
+    styled_table,
+)
 
 # ── 字体注册 ──────────────────────────────────────────────────────────────────
 
@@ -49,40 +58,17 @@ def _register_fonts():
                 continue
     return "Helvetica"
 
-CN_FONT = _register_fonts()
+CN_FONT = SHARED_CN_FONT
 
 # ── 样式 ──────────────────────────────────────────────────────────────────────
 
 def _styles():
-    def s(name, **kw):
-        return ParagraphStyle(name, fontName=CN_FONT, **kw)
-    return {
-        "title":   s("T",  fontSize=22, leading=28, alignment=TA_CENTER, spaceAfter=6),
-        "subtitle":s("ST", fontSize=13, leading=18, alignment=TA_CENTER, spaceAfter=4, textColor=colors.HexColor("#555555")),
-        "h1":      s("H1", fontSize=14, leading=20, spaceBefore=14, spaceAfter=6, textColor=colors.HexColor("#1a3c6e")),
-        "h2":      s("H2", fontSize=12, leading=16, spaceBefore=8,  spaceAfter=4, textColor=colors.HexColor("#2c5f9e")),
-        "body":    s("B",  fontSize=10, leading=15, spaceAfter=4, alignment=TA_JUSTIFY),
-        "caption": s("C",  fontSize=8,  leading=12, textColor=colors.grey, alignment=TA_CENTER),
-    }
+    return build_styles("hk")
 
 # ── 工具函数 ──────────────────────────────────────────────────────────────────
 
 def _tbl(data, col_widths=None, header_bg="#1a3c6e"):
-    style = TableStyle([
-        ("BACKGROUND",    (0, 0), (-1, 0), colors.HexColor(header_bg)),
-        ("TEXTCOLOR",     (0, 0), (-1, 0), colors.white),
-        ("FONTNAME",      (0, 0), (-1, -1), CN_FONT),
-        ("FONTSIZE",      (0, 0), (-1, -1), 9),
-        ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, colors.HexColor("#f0f4fa")]),
-        ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
-        ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
-        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING",    (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-    ])
-    t = Table(data, colWidths=col_widths, repeatRows=1)
-    t.setStyle(style)
-    return t
+    return styled_table(data, col_widths=col_widths, kind="hk")
 
 
 def _chart_to_image(fig, width=14*cm):
@@ -634,15 +620,27 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
     story = []
 
     # ── 封面 ──
-    story += [
-        Spacer(1, 3*cm),
-        Paragraph(stock_name, st["title"]),
-        Paragraph("港股深度分析报告", st["subtitle"]),
-        Spacer(1, 0.5*cm),
-        Paragraph(f"股票代码：{d['ts_code']}　　市场：香港联交所", st["body"]),
-        Paragraph(f"报告日期：{datetime.now().strftime('%Y年%m月%d日')}　　数据来源：小德法 Tushare API + 免费行情兜底", st["body"]),
-        PageBreak(),
-    ]
+    add_cover(
+        story,
+        stock_name,
+        "港股深度分析报告",
+        [
+            ["证券代码", d["ts_code"]],
+            ["交易市场", "香港联交所"],
+            ["报告日期", datetime.now().strftime("%Y年%m月%d日")],
+        ],
+        kind="hk",
+        highlights=[
+            ["模型评级", str(hk_view.get("rating", "N/A")), f"综合分 {hk_view.get('score', 'N/A')}"],
+            ["当前股价", f"{val.get('cur_price', 'N/A')} HKD", val.get("price_source", "Tushare日线")],
+            ["南向资金", f"{sb_analysis.get('latest_ratio', 'N/A')}%", sb_analysis.get("trend", "未知")],
+        ],
+        notes=[
+            ["核心结论", f"当前PE(TTM){val.get('pe_ttm','N/A')}、PB{val.get('pb','N/A')}；南向资金{sb_analysis.get('latest_ratio','N/A')}%，估值需结合流动性折价复核。"],
+            ["关注变量", "南向资金、成交额、股息/回购、汇率影响、ADR映射和监管敏感度。"],
+            ["主要风险", "港股流动性、人民币/港元汇率、国际资金流动、监管边际变化和信息披露差异。"],
+        ],
+    )
 
     # ── 一、公司概况 ──
     story.append(Paragraph("一、公司概况", st["h1"]))
@@ -655,12 +653,18 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
     ]
     story.append(_tbl(info_rows, col_widths=[3.5*cm, 5.5*cm, 3.5*cm, 5.5*cm]))
     story.append(Spacer(1, 0.3*cm))
+    story.append(metric_cards([
+        ["流动性", liquidity.get("level", "未知"), liquidity.get("note", "")],
+        ["股息率", f"{dividend_rate if dividend_rate is not None else 'N/A'}%", "股东回报"],
+        ["监管敏感度", hk_profile.get("regulatory_sensitivity", "未知"), "估值中枢风险"],
+    ], kind="hk"))
+    story.append(Spacer(1, 0.3*cm))
 
     # ── 二、投资建议与交易计划 ──
     story.append(Paragraph("二、投资建议与港股交易计划", st["h1"]))
-    story.append(Paragraph(
+    story.append(callout_box(
         "以下结论由港股投研模型先生成，重点纳入南向资金、流动性、股息、汇率和趋势风险；仅供研究参考，不构成投资依据。",
-        st["caption"]
+        kind="hk"
     ))
     story.append(Spacer(1, 0.2*cm))
     plan_rows = [["区间/触发器", "价格", "港股操作含义"]]
@@ -902,7 +906,11 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
     for r in risks:
         story.append(Paragraph(f"• {r}", st["body"]))
 
-    doc.build(story)
+    doc.build(
+        story,
+        onFirstPage=lambda canvas, doc_obj: draw_report_footer(canvas, doc_obj, "hk"),
+        onLaterPages=lambda canvas, doc_obj: draw_report_footer(canvas, doc_obj, "hk"),
+    )
     print(f"\n✓ 港股 PDF 报告已生成：{output_path}")
 
 

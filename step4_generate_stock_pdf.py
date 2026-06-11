@@ -33,6 +33,15 @@ from analyst_model import build_stock_research_view, render_stock_research_brief
 from ai_analysis import get_investment_advice, get_industry_news
 from config import md_to_rl, md_to_story
 from peer_model import build_peer_view, render_peer_brief
+from pdf_design import (
+    CN_FONT as SHARED_CN_FONT,
+    add_cover,
+    build_styles,
+    callout_box,
+    draw_report_footer,
+    metric_cards,
+    styled_table,
+)
 
 # ── 字体注册 ──────────────────────────────────────────────────────────────────
 
@@ -52,40 +61,17 @@ def _register_fonts():
                 continue
     return "Helvetica"
 
-CN_FONT = _register_fonts()
+CN_FONT = SHARED_CN_FONT
 
 # ── 样式 ──────────────────────────────────────────────────────────────────────
 
 def _styles():
-    def s(name, **kw):
-        return ParagraphStyle(name, fontName=CN_FONT, **kw)
-    return {
-        "title":   s("T",  fontSize=22, leading=28, alignment=TA_CENTER, spaceAfter=6),
-        "subtitle":s("ST", fontSize=13, leading=18, alignment=TA_CENTER, spaceAfter=4, textColor=colors.HexColor("#555555")),
-        "h1":      s("H1", fontSize=14, leading=20, spaceBefore=14, spaceAfter=6, textColor=colors.HexColor("#8b1a1a")),
-        "h2":      s("H2", fontSize=12, leading=16, spaceBefore=8,  spaceAfter=4, textColor=colors.HexColor("#c0392b")),
-        "body":    s("B",  fontSize=10, leading=15, spaceAfter=4, alignment=TA_JUSTIFY),
-        "caption": s("C",  fontSize=8,  leading=12, textColor=colors.grey, alignment=TA_CENTER),
-    }
+    return build_styles("stock")
 
 # ── 工具函数 ──────────────────────────────────────────────────────────────────
 
 def _tbl(data, col_widths=None, header_bg="#8b1a1a"):
-    style = TableStyle([
-        ("BACKGROUND",    (0, 0), (-1, 0), colors.HexColor(header_bg)),
-        ("TEXTCOLOR",     (0, 0), (-1, 0), colors.white),
-        ("FONTNAME",      (0, 0), (-1, -1), CN_FONT),
-        ("FONTSIZE",      (0, 0), (-1, -1), 9),
-        ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, colors.HexColor("#fff5f5")]),
-        ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
-        ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
-        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING",    (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-    ])
-    t = Table(data, colWidths=col_widths, repeatRows=1)
-    t.setStyle(style)
-    return t
+    return styled_table(data, col_widths=col_widths, kind="stock")
 
 
 def _chart_to_image(fig, width=14*cm):
@@ -743,15 +729,27 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     story = []
 
     # ── 封面 ──
-    story += [
-        Spacer(1, 3*cm),
-        Paragraph(stock_name, st["title"]),
-        Paragraph("股票深度分析报告", st["subtitle"]),
-        Spacer(1, 0.5*cm),
-        Paragraph(f"股票代码：{d['ts_code']}　　所属行业：{industry}", st["body"]),
-        Paragraph(f"报告日期：{datetime.now().strftime('%Y年%m月%d日')}　　数据来源：小德法 Tushare API + 免费行情兜底", st["body"]),
-        PageBreak(),
-    ]
+    add_cover(
+        story,
+        stock_name,
+        "股票深度分析报告",
+        [
+            ["证券代码", d["ts_code"]],
+            ["所属行业", industry],
+            ["报告日期", datetime.now().strftime("%Y年%m月%d日")],
+        ],
+        kind="stock",
+        highlights=[
+            ["模型评级", str(analyst_view.get("rating", "N/A")), f"综合分 {analyst_view.get('score', 'N/A')}"],
+            ["当前股价", f"{stock_summary.get('cur_price', 'N/A')} 元", stock_summary.get("price_source", "Tushare日线/估值")],
+            ["PE(TTM)", str(val.get("pe_ttm", "N/A")), f"历史分位 {val.get('pe_percentile', 'N/A')}%"],
+        ],
+        notes=[
+            ["核心结论", f"当前PE(TTM){val.get('pe_ttm','N/A')}、历史分位{val.get('pe_percentile','N/A')}%，ROE{fin.get('roe','N/A')}%；估值不高但增长与现金流仍需验证。"],
+            ["关注变量", "估值分位、业绩增长、现金流质量、资金技术和行业景气度共同影响研究判断。"],
+            ["主要风险", "消费需求、行业竞争、政策变化、估值中枢下移及市场系统性波动。"],
+        ],
+    )
 
     # ── 一、公司概况 ──
     story.append(Paragraph("一、公司概况", st["h1"]))
@@ -765,10 +763,16 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     ]
     story.append(_tbl(info_rows, col_widths=[3.5*cm, 5.5*cm, 3.5*cm, 5.5*cm]))
     story.append(Spacer(1, 0.3*cm))
+    story.append(metric_cards([
+        ["ROE", f"{fin.get('roe', 'N/A')}%", "盈利能力"],
+        ["营收增速", f"{fin.get('rev_growth', 'N/A')}%", "成长性"],
+        ["现金流质量", cf_quality.get("quality_label", "N/A") if cf_quality else "N/A", "利润含金量"],
+    ], kind="stock"))
+    story.append(Spacer(1, 0.3*cm))
 
     # ── 二、买卖建议（AI） ──
     story.append(Paragraph("二、投资建议与交易计划", st["h1"]))
-    story.append(Paragraph("以下结论由量化投研模型先生成，AI 仅负责解释与组织语言；仅供研究参考，不构成投资依据。", st["caption"]))
+    story.append(callout_box("以下结论由量化投研模型先生成，AI 仅负责解释与组织语言；仅供研究参考，不构成投资依据。", kind="stock"))
     story.append(Spacer(1, 0.2*cm))
     plan_chart = _trading_plan_chart(analyst_view, stock_name)
     if plan_chart:
@@ -1215,7 +1219,11 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     for r in risks:
         story.append(Paragraph(f"• {r}", st["body"]))
 
-    doc.build(story)
+    doc.build(
+        story,
+        onFirstPage=lambda canvas, doc_obj: draw_report_footer(canvas, doc_obj, "stock"),
+        onLaterPages=lambda canvas, doc_obj: draw_report_footer(canvas, doc_obj, "stock"),
+    )
     print(f"\n✓ PDF 报告已生成：{output_path}")
 
 
