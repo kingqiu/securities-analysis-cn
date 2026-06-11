@@ -33,6 +33,7 @@ from etf_analyst_model import build_etf_research_view, render_etf_research_brief
 from pdf_design import (
     CN_FONT as SHARED_CN_FONT,
     add_cover,
+    add_followup_watchlist,
     add_report_reading_guide,
     build_styles,
     callout_box,
@@ -561,6 +562,33 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
             "较强",
             "规模和份额变化有助于观察资金配置热度和流动性基础。",
             "持续申赎、成交额、做市活跃度",
+        ],
+    ], kind="etf")
+
+    add_followup_watchlist(story, [
+        [
+            "指数估值与暴露",
+            f"指数PE分位 {etf_summary.get('index_pe_pct')}%；Top10权重 {etf_summary.get('top10_weight')}%",
+            "每月或指数成分调整后",
+            "复核估值分位、行业权重和成分集中度，确认指数暴露是否仍符合预期。",
+        ],
+        [
+            "跟踪质量",
+            f"年化跟踪误差 {etf_summary.get('tracking_error')}%；日均偏差 {etf_summary.get('tracking_bias')}%",
+            "未来20-60个交易日",
+            "观察偏差是否持续扩大，并复核现金拖累、复制误差、费用和申赎影响。",
+        ],
+        [
+            "折溢价与成交体验",
+            f"当前溢价 {etf_summary.get('premium')}%；历史分位 {etf_summary.get('premium_pct')}%；换手 {etf_summary.get('turnover_rate')}%",
+            "未来5-20个交易日",
+            "结合IOPV、成交额和申赎机制判断偏离是否短期，避免把单日折溢价当作结论。",
+        ],
+        [
+            "规模与份额变化",
+            f"规模 {aum_bn}亿元；20日份额变化 {etf_summary.get('net_flow_20d')}万份；60日份额变化 {etf_summary.get('net_flow_60d')}万份",
+            "未来20-60个交易日",
+            "观察份额是否持续申购或赎回，并结合成交额判断流动性基础是否变化。",
         ],
     ], kind="etf")
 

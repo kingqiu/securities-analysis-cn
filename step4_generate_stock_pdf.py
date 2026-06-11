@@ -37,6 +37,7 @@ from peer_model import build_peer_view, render_peer_brief
 from pdf_design import (
     CN_FONT as SHARED_CN_FONT,
     add_cover,
+    add_followup_watchlist,
     add_report_reading_guide,
     build_styles,
     callout_box,
@@ -812,6 +813,33 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
             "偏弱",
             "新闻和行业动态适合提示方向，但需要和业绩、价格、销量交叉验证。",
             "订单、价格、销量、库存、市占率变化",
+        ],
+    ], kind="stock")
+
+    add_followup_watchlist(story, [
+        [
+            "业绩与现金流",
+            f"营收增速 {fin.get('rev_growth','N/A')}%；净利增速 {fin.get('profit_growth','N/A')}%；现金流质量 {cf_quality.get('quality_label','N/A') if cf_quality else 'N/A'}",
+            "下一次财报/公告后",
+            "复核收入、利润、毛利率、经营现金流是否同向改善，避免只看单一利润指标。",
+        ],
+        [
+            "估值与同行位置",
+            f"PE(TTM) {val.get('pe_ttm','N/A')}；历史分位 {val.get('pe_percentile','N/A')}%；同行PE中位 {industry_comp.get('industry_pe_median','N/A') if industry_comp else 'N/A'}",
+            "每月或估值大幅波动后",
+            "重新比较历史分位、同行估值和盈利预期，判断估值变化来自修复还是基本面折价。",
+        ],
+        [
+            "资金与趋势",
+            f"20日主力净流入 {net_mf_20d}万元；融资余额趋势 {margin_trend}；60日波动率 {trading_disc.get('volatility_60d','N/A')}%",
+            "未来5-20个交易日",
+            "观察成交、资金流和均线位置是否互相验证；若只出现单一信号，证据强度应下调。",
+        ],
+        [
+            "行业与公司事件",
+            f"行业：{industry}；业绩预告：{forecast_info}",
+            "重要公告/行业新闻后",
+            "优先用公司公告和权威行业信息复核需求、价格、库存、政策和竞争格局变化。",
         ],
     ], kind="stock")
 

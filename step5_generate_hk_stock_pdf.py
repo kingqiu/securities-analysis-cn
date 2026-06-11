@@ -33,6 +33,7 @@ from hk_analyst_model import build_hk_research_view, render_hk_research_brief
 from pdf_design import (
     CN_FONT as SHARED_CN_FONT,
     add_cover,
+    add_followup_watchlist,
     add_report_reading_guide,
     build_styles,
     callout_box,
@@ -692,6 +693,33 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
             "偏弱",
             "这些因素多为外部变量，适合作为风险提示，不能单独推导结论。",
             "人民币/港元汇率、监管政策、ADR价差",
+        ],
+    ], kind="hk")
+
+    add_followup_watchlist(story, [
+        [
+            "基本面与估值",
+            f"PE(TTM) {val.get('pe_ttm','N/A')}；ROE {fin.get('roe', val.get('roe_avg','N/A'))}%；营收增速 {fin.get('rev_growth','N/A')}%",
+            "下一次财报/业绩公告后",
+            "复核盈利质量、毛利率、现金流和业务分部变化，避免只用低估值解释价格波动。",
+        ],
+        [
+            "南向资金与流动性",
+            f"南向持仓比例 {sb_analysis.get('latest_ratio','N/A')}%；趋势 {sb_analysis.get('trend','未知')}；{liquidity.get('note','流动性数据不足')}",
+            "未来5-20个交易日",
+            "观察南向资金、成交额和换手是否连续改善；单日流入流出只作为弱提示。",
+        ],
+        [
+            "股东回报",
+            f"股息率 {dividend_rate if dividend_rate is not None else 'N/A'}%；{hk_profile.get('buyback_signal')}",
+            "分红/回购公告后",
+            "复核自由现金流、派息政策和回购持续性，区分一次性回报与长期支撑。",
+        ],
+        [
+            "外部变量",
+            f"币种 {hk_profile.get('currency','HKD')}；监管敏感度 {hk_profile.get('regulatory_sensitivity','未知')}；ADR {hk_profile.get('adr_ticker') or '未识别'}",
+            "政策、汇率或海外市场明显变化后",
+            "区分业务基本面变化和汇率、监管、海外映射带来的估值扰动。",
         ],
     ], kind="hk")
 

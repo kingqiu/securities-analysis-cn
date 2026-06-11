@@ -11,7 +11,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import PageBreak, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import KeepTogether, PageBreak, Paragraph, Spacer, Table, TableStyle
 
 
 def register_cn_font():
@@ -433,6 +433,53 @@ def evidence_map(story, rows, kind="stock"):
     ]))
     story.append(table)
     story.append(Spacer(1, 0.3 * cm))
+
+
+def add_followup_watchlist(story, rows, kind="stock"):
+    theme = theme_for(kind)
+    styles = build_styles(kind)
+    block = [
+        Paragraph("后续重点观察清单", styles["h1"]),
+        Paragraph(
+            "以下清单用于提示后续复盘重点。观察窗口代表适合重新检查证据的时间范围，不对应任何交易动作。",
+            styles["caption"],
+        ),
+        Spacer(1, 0.12 * cm),
+    ]
+
+    head_style = ParagraphStyle(
+        "WatchHead",
+        fontName=CN_FONT,
+        fontSize=7.8,
+        leading=10.5,
+        textColor=colors.HexColor(theme["ink"]),
+        alignment=1,
+    )
+    body_style = ParagraphStyle(
+        "WatchBody",
+        fontName=CN_FONT,
+        fontSize=7.6,
+        leading=10.8,
+        textColor=colors.HexColor(theme["ink"]),
+    )
+    table_data = [[Paragraph(str(item), head_style) for item in ["观察主题", "当前证据", "观察窗口", "复核重点"]]]
+    for row in rows:
+        table_data.append([Paragraph(str(item), body_style) for item in row])
+
+    table = styled_table(
+        table_data,
+        col_widths=[3.1 * cm, 4.7 * cm, 3.5 * cm, 4.7 * cm],
+        kind=kind,
+        compact=True,
+    )
+    table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    block.append(table)
+    block.append(Spacer(1, 0.35 * cm))
+    story.append(KeepTogether(block))
 
 
 def add_report_reading_guide(story, kind="stock", report_type="single"):
