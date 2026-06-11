@@ -7,6 +7,7 @@ test_apis.py
 # Python缓存
 *.pyc
 __pycache__/
+.matplotlib-cache/
 
 # 临时数据文件
 temp_*.json
@@ -15,6 +16,7 @@ etf_real_data.json
 # 生成的报告
 *.docx
 *.pdf
+preview_pages/
 
 # macOS
 .DS_Store

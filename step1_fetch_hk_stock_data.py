@@ -6,32 +6,45 @@
 import requests
 import json
 from datetime import datetime, timedelta
-from config import TUSHARE_API_URL as API_URL, TUSHARE_API_TOKEN as API_TOKEN, STOCK_DAILY_DAYS, STOCK_FINANCIAL_YEARS
+from config import (
+    TUSHARE_API_URL as API_URL,
+    TUSHARE_API_TOKEN as API_TOKEN,
+    STOCK_DAILY_DAYS,
+    STOCK_FINANCIAL_YEARS,
+    ENABLE_OPTIONAL_CONCEPTS,
+    ENABLE_OPTIONAL_MACRO_NEWS,
+)
 from config import api_rate_limiter
 
 api_call_count = 0
 
 
-def call_api(api_name, params, fields=""):
+def call_api(api_name, params, fields="", retries=1):
     global api_call_count
     api_call_count += 1
-    api_rate_limiter.acquire()
     data = {
         "api_name": api_name,
         "token": API_TOKEN,
         "params": params,
         "fields": fields,
     }
-    try:
-        resp = requests.post(API_URL, json=data, headers={"Content-Type": "application/json"}, timeout=30)
-        resp.raise_for_status()
-        result = resp.json()
-        if result.get("code") == 0:
-            return result["data"]
-        else:
-            print(f"  ✗ API错误 ({api_name}): {result.get('msg')}")
-    except Exception as e:
-        print(f"  ✗ API调用失败 ({api_name}): {e}")
+    for attempt in range(retries + 1):
+        api_rate_limiter.acquire()
+        try:
+            resp = requests.post(API_URL, json=data, headers={"Content-Type": "application/json"}, timeout=30)
+            resp.raise_for_status()
+            result = resp.json()
+            if result.get("code") == 0:
+                return result["data"]
+            else:
+                print(f"  ✗ API错误 ({api_name}): {result.get('msg')}")
+                break
+        except Exception as e:
+            if attempt < retries:
+                import time
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            print(f"  ✗ API调用失败 ({api_name}): {e}")
     return None
 
 
@@ -123,30 +136,36 @@ def fetch_hk_stock_data(ts_code: str) -> dict:
     # 港股的分红信息在 hk_fina_indicator 中已有 dps_hkd 字段
     # 此处补充获取概念/板块（尝试 concept_detail）
     print("8/9 获取概念板块...")
-    concept = call_api("concept_detail", {"ts_code": ts_code})
-    if concept and concept.get("items"):
-        data["concepts"] = {"fields": concept["fields"], "items": concept["items"]}
-        print(f"  ✓ {len(concept['items'])} 个概念")
+    if ENABLE_OPTIONAL_CONCEPTS:
+        concept = call_api("concept_detail", {"ts_code": ts_code})
+        if concept and concept.get("items"):
+            data["concepts"] = {"fields": concept["fields"], "items": concept["items"]}
+            print(f"  ✓ {len(concept['items'])} 个概念")
+        else:
+            print("  ○ 无概念板块数据（港股通常无此数据）")
     else:
-        print("  ○ 无概念板块数据（港股通常无此数据）")
+        print("  ○ 已跳过（ENABLE_OPTIONAL_CONCEPTS=1 时启用）")
 
     # 9. 央视新闻（用于宏观环境参考）
     print("9/9 获取宏观新闻...")
-    from datetime import date
-    today_str = date.today().strftime("%Y%m%d")
-    news = call_api("cctv_news", {"date": today_str})
-    if news and news.get("items"):
-        data["macro_news"] = {"fields": news["fields"], "items": news["items"][:10]}
-        print(f"  ✓ {len(data['macro_news']['items'])} 条")
-    else:
-        # 尝试前一天
-        yesterday = (date.today() - timedelta(days=1)).strftime("%Y%m%d")
-        news = call_api("cctv_news", {"date": yesterday})
+    if ENABLE_OPTIONAL_MACRO_NEWS:
+        from datetime import date
+        today_str = date.today().strftime("%Y%m%d")
+        news = call_api("cctv_news", {"date": today_str})
         if news and news.get("items"):
             data["macro_news"] = {"fields": news["fields"], "items": news["items"][:10]}
-            print(f"  ✓ {len(data['macro_news']['items'])} 条（昨日）")
+            print(f"  ✓ {len(data['macro_news']['items'])} 条")
         else:
-            print("  ○ 无宏观新闻")
+            # 尝试前一天
+            yesterday = (date.today() - timedelta(days=1)).strftime("%Y%m%d")
+            news = call_api("cctv_news", {"date": yesterday})
+            if news and news.get("items"):
+                data["macro_news"] = {"fields": news["fields"], "items": news["items"][:10]}
+                print(f"  ✓ {len(data['macro_news']['items'])} 条（昨日）")
+            else:
+                print("  ○ 无宏观新闻")
+    else:
+        print("  ○ 已跳过（ENABLE_OPTIONAL_MACRO_NEWS=1 时启用；行业新闻优先使用 Tavily）")
 
     print(f"\n✓ 数据获取完成，共调用 {api_call_count} 次 API")
     return data

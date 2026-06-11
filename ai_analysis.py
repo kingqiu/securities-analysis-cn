@@ -4,8 +4,7 @@ Minima AI 买卖建议模块
 调用 MiniMax-M2.7 模型，基于量化指标生成投资建议文字
 """
 
-import requests
-from config import MINIMA_API_URL, MINIMA_MODEL, MINIMA_API_KEY
+from analyst_model import build_stock_research_view, render_stock_research_brief
 from providers import get_llm_provider
 
 _ETF_PROMPT = """你是一位专业的基金分析师。请基于以下量化数据，对{name}（{ts_code}）给出简洁的投资建议。
@@ -27,7 +26,10 @@ _ETF_PROMPT = """你是一位专业的基金分析师。请基于以下量化数
 
 要求：语言简洁专业，总字数200字以内，不要出现"根据以上数据"等套话。"""
 
-_STOCK_PROMPT = """你是一位资深的卖方研究员。请基于以下多维度量化数据，对{name}（{ts_code}）给出专业深入的投资建议。
+_STOCK_PROMPT = """你是一位资深的卖方研究员。请基于以下量化数据和已计算的投研模型结论，对{name}（{ts_code}）给出专业、审慎、可复盘的投资建议。
+
+【投研模型结论（必须遵守，不得擅自改评级或价格区间）】
+{analyst_view}
 
 【估值维度】
 - 所属行业：{industry}
@@ -57,13 +59,17 @@ _STOCK_PROMPT = """你是一位资深的卖方研究员。请基于以下多维�
 【业绩预告】
 - 最新业绩预告：{forecast_info}
 
-请给出：
-1. 投资评级（强烈买入 / 买入 / 持有 / 减持 / 回避）
-2. 核心逻辑（4条，每条1-2句，涵盖估值、成长性、资金面、催化剂）
-3. 主要风险（2条）
-4. 建议操作策略（1句话）
+【同行龙头参照】
+{peer_context}
 
-要求：语言专业凝练，总字数300字以内。"""
+请给出：
+1. 投资评级与适合人群（明确周期，避免承诺收益）
+2. 买入/观察/卖出区间解释（说明这是交易计划区间，不是确定性最佳点）
+3. 核心逻辑（4条，每条1-2句，涵盖估值、质量、成长、资金技术）
+4. 主要风险与反证条件（至少2条，说明什么情况会推翻原判断）
+5. 建议操作策略（分批、仓位、复盘条件）
+
+要求：语言专业凝练，总字数500字以内；不要编造数据；不要使用“稳赚”“最佳买点”等确定性表述。"""
 
 _FALLBACK = "暂无AI分析建议（API调用失败）"
 
@@ -183,6 +189,13 @@ def _rule_based_etf_advice(summary_data: dict) -> str:
 
 
 def _rule_based_stock_advice(summary_data: dict) -> str:
+    view = build_stock_research_view(summary_data)
+    if view:
+        return "\n".join([
+            "AI服务暂不可用，以下为基于专业投研模型的规则化建议：",
+            render_stock_research_brief(view),
+        ])
+
     pe = _safe_float(summary_data.get("pe_ttm"))
     roe = _safe_float(summary_data.get("roe"))
     debt = _safe_float(summary_data.get("debt_ratio"))
@@ -302,9 +315,11 @@ def get_investment_advice(security_type: str, summary_data: dict) -> str:
         )
     elif security_type == "stock":
         d = summary_data
+        analyst_view = render_stock_research_brief(build_stock_research_view(d))
         prompt = _STOCK_PROMPT.format(
             name=d.get("name", ""),
             ts_code=d.get("ts_code", ""),
+            analyst_view=analyst_view,
             industry=d.get("industry", "未知"),
             pe_ttm=d.get("pe_ttm", "N/A"),
             pe_percentile=d.get("pe_percentile", "N/A"),
@@ -329,6 +344,7 @@ def get_investment_advice(security_type: str, summary_data: dict) -> str:
             cur_price=d.get("cur_price", "N/A"),
             ma_position=d.get("ma_position", "未知"),
             forecast_info=d.get("forecast_info", "N/A"),
+            peer_context=d.get("peer_context", "N/A"),
         )
     elif security_type == "hk_stock":
         d = summary_data
@@ -447,13 +463,21 @@ _INDUSTRY_NEWS_PROMPT = """你是一位专业的证券分析师。请为以下�
 def get_industry_news(name: str, ts_code: str, industry: str, market: str = "A股") -> str:
     """
     生成与该公司/行业相关的动态新闻摘要。
-    替代原来的央视新闻联播通用新闻。
+    优先使用搜索服务；仅当 Tavily 未配置或不可用时，SearchProvider 才会降级到 AI。
     """
-    prompt = _INDUSTRY_NEWS_PROMPT.format(
-        name=name, ts_code=ts_code, industry=industry, market=market
-    )
-    print("  调用 AI 生成行业动态...")
-    result = _call_llm(prompt)
-    if result == _FALLBACK:
-        return f"AI服务暂不可用，无法获取{name}（{industry}行业）的相关动态。"
-    return result
+    from web_research import search_company_news
+
+    print("  通过搜索服务获取行业动态...")
+    result = search_company_news(name, ts_code, market, industry)
+    if result.get("status") != "success":
+        return f"搜索服务暂不可用，无法获取{name}（{industry}行业）的相关动态：{result.get('summary', '未知原因')}"
+
+    sections = result.get("sections", {})
+    lines = []
+    for key in ("recent_events", "industry_dynamics", "analyst_views", "risk_factors", "catalysts"):
+        content = sections.get(key)
+        if content:
+            lines.append(content)
+    if not lines:
+        return result.get("summary") or "搜索结果中未提取到可用行业动态。"
+    return "\n\n".join(lines)

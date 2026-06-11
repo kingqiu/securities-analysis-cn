@@ -684,7 +684,16 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
     if web_research and web_research.get("sections"):
         story.append(PageBreak())
         story.append(Paragraph("九、公司研究与行业动态", st["h1"]))
-        story.append(Paragraph("以下信息由 AI 基于公开信息整理，仅供参考，请以官方公告为准。", st["caption"]))
+        source_name = web_research.get("source", "公开搜索")
+        source_count = len(web_research.get("sources", []))
+        if web_research.get("fallback_used"):
+            caption = f"Tavily 未配置或不可用，本页使用 AI 降级整理（来源：{source_name}），仅供参考，请以官方公告为准。"
+        else:
+            caption = f"以下信息由 Tavily 公开搜索结果整理（来源：{source_name}，参考来源{source_count}条），仅供参考，请以官方公告为准。"
+        story.append(Paragraph(
+            caption,
+            st["caption"],
+        ))
         story.append(Spacer(1, 0.2*cm))
 
         sections = web_research["sections"]
@@ -703,19 +712,20 @@ def create_hk_stock_pdf(data_file: str, output_path: str) -> None:
                 story.append(Spacer(1, 0.2*cm))
 
     # ── 十、行业与公司动态 ──
-    story.append(Paragraph("十、行业与公司动态", st["h1"]))
-    story.append(Paragraph(
-        f"以下为 AI 基于公开信息整理的{stock_name}所在行业近期动态，仅供参考。",
-        st["caption"]
-    ))
-    story.append(Spacer(1, 0.2*cm))
-    try:
-        _industry = basic.get("industry", basic.get("name", "未知"))
-        industry_news = get_industry_news(stock_name, d["ts_code"], _industry, "港股")
-        story.extend(md_to_story(industry_news, st["body"], table_builder=_tbl))
-    except Exception as e:
-        story.append(Paragraph(f"行业动态获取失败：{e}", st["body"]))
-    story.append(Spacer(1, 0.3*cm))
+    if not (web_research and web_research.get("sections")):
+        story.append(Paragraph("十、行业与公司动态", st["h1"]))
+        story.append(Paragraph(
+            f"以下优先通过搜索服务获取{stock_name}所在行业近期动态；搜索不可用时才降级为AI整理，仅供参考。",
+            st["caption"]
+        ))
+        story.append(Spacer(1, 0.2*cm))
+        try:
+            _industry = basic.get("industry", basic.get("name", "未知"))
+            industry_news = get_industry_news(stock_name, d["ts_code"], _industry, "港股")
+            story.extend(md_to_story(industry_news, st["body"], table_builder=_tbl))
+        except Exception as e:
+            story.append(Paragraph(f"行业动态获取失败：{e}", st["body"]))
+        story.append(Spacer(1, 0.3*cm))
 
     # ── 风险提示 ──
     story.append(PageBreak())

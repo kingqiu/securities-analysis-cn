@@ -72,7 +72,7 @@ class SearchProvider(ABC):
     """新闻搜索/研究适配器基类"""
 
     @abstractmethod
-    def search_company(self, company_name: str, ts_code: str, market: str = "A股") -> dict:
+    def search_company(self, company_name: str, ts_code: str, market: str = "A股", industry: str = "") -> dict:
         """
         搜索公司近期信息。
         返回: {

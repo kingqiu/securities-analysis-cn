@@ -25,13 +25,13 @@ DATA_PROVIDER = _os.environ.get("DATA_PROVIDER", "tushare")
 # AI大模型：minimax（默认）| openai
 LLM_PROVIDER = _os.environ.get("LLM_PROVIDER", "minimax")
 
-# 搜索/研究：ai_summary（默认）| tavily | none
-SEARCH_PROVIDER = _os.environ.get("SEARCH_PROVIDER", "ai_summary")
+# 搜索/研究：auto（默认，Tavily优先、AI降级）| tavily | ai_summary | none
+SEARCH_PROVIDER = _os.environ.get("SEARCH_PROVIDER", "auto")
 
 # ============================================================
 # 数据源配置：Tushare
 # ============================================================
-TUSHARE_API_URL = _os.environ.get("TUSHARE_API_URL", "http://tsy.xiaodefa.cn")
+TUSHARE_API_URL = _os.environ.get("TUSHARE_API_URL", "https://tt.xiaodefa.cn")
 TUSHARE_API_TOKEN = _os.environ.get("TUSHARE_API_TOKEN", "")
 
 # ============================================================
@@ -51,7 +51,12 @@ OPENAI_MODEL = _os.environ.get("OPENAI_MODEL", "gpt-4o")
 # ============================================================
 # 搜索/研究配置
 # ============================================================
-TAVILY_API_KEY = _os.environ.get("TAVILY_API_KEY", "")
+TAVILY_API_KEY = (
+    _os.environ.get("TAVILY_API_KEY", "")
+    or _os.environ.get("TAVILY_API_TOKEN", "")
+    or _os.environ.get("TAVILY_TOKEN", "")
+    or _os.environ.get("TAVILY_KEY", "")
+)
 
 # ============================================================
 # 数据模式
@@ -103,6 +108,10 @@ PE_LOW = 15.0               # PE低于此值为低估
 
 # 对比分析配置
 MAX_COMPARE_COUNT = 5       # 最多同时对比5只标的
+
+# 可选接口能力。部分 Tushare 兼容网关不开放这些接口，默认关闭以减少噪音。
+ENABLE_OPTIONAL_CONCEPTS = _os.environ.get("ENABLE_OPTIONAL_CONCEPTS", "0") == "1"
+ENABLE_OPTIONAL_MACRO_NEWS = _os.environ.get("ENABLE_OPTIONAL_MACRO_NEWS", "0") == "1"
 
 # ============================================================
 # API 限流器（Tushare 接口限制 120次/分钟）
@@ -280,4 +289,3 @@ def md_to_story(text: str, body_style, table_builder=None):
             i += 1
 
     return elements
-

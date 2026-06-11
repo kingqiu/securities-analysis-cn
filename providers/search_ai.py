@@ -21,7 +21,7 @@ class AISearchProvider(SearchProvider):
     def is_available(self) -> bool:
         return self._llm.is_available()
 
-    def search_company(self, company_name: str, ts_code: str, market: str = "A股") -> dict:
+    def search_company(self, company_name: str, ts_code: str, market: str = "A股", industry: str = "") -> dict:
         if not self._llm.is_available():
             return {"status": "no_api_key", "summary": "未配置 AI API Key，跳过互联网研究"}
 
@@ -63,6 +63,7 @@ class AISearchProvider(SearchProvider):
         sections = self._parse_sections(text)
         return {
             "status": "success",
+            "source": "ai_summary",
             "raw_text": text,
             "sections": sections,
         }

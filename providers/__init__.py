@@ -31,21 +31,34 @@ def get_search_provider() -> SearchProvider:
 
     llm = get_llm_provider()
 
-    if SEARCH_PROVIDER == "ai_summary":
+    if SEARCH_PROVIDER == "auto":
+        from config import TAVILY_API_KEY
+        from .search_ai import AISearchProvider
+        from .search_tavily import TavilySearchProvider
+        return _FallbackSearchProvider(
+            primary=TavilySearchProvider(TAVILY_API_KEY, llm),
+            fallback=AISearchProvider(llm),
+        )
+
+    elif SEARCH_PROVIDER == "ai_summary":
         from .search_ai import AISearchProvider
         return AISearchProvider(llm)
 
     elif SEARCH_PROVIDER == "tavily":
         from config import TAVILY_API_KEY
+        from .search_ai import AISearchProvider
         from .search_tavily import TavilySearchProvider
-        return TavilySearchProvider(TAVILY_API_KEY, llm)
+        return _FallbackSearchProvider(
+            primary=TavilySearchProvider(TAVILY_API_KEY, llm),
+            fallback=AISearchProvider(llm),
+        )
 
     elif SEARCH_PROVIDER == "none":
         # 禁用搜索
         return _NoopSearchProvider()
 
     else:
-        raise ValueError(f"未知的 Search Provider: {SEARCH_PROVIDER}。支持: ai_summary, tavily, none")
+        raise ValueError(f"未知的 Search Provider: {SEARCH_PROVIDER}。支持: auto, tavily, ai_summary, none")
 
 
 def get_data_provider() -> DataProvider:
@@ -73,5 +86,44 @@ class _NoopSearchProvider(SearchProvider):
     def is_available(self) -> bool:
         return False
 
-    def search_company(self, company_name, ts_code, market="A股"):
+    def search_company(self, company_name, ts_code, market="A股", industry=""):
         return {"status": "disabled", "summary": "搜索功能已禁用", "sections": {}}
+
+
+class _FallbackSearchProvider(SearchProvider):
+    """搜索优先、AI降级。用于近期新闻和行业动态。"""
+
+    def __init__(self, primary: SearchProvider, fallback: SearchProvider):
+        self._primary = primary
+        self._fallback = fallback
+
+    @property
+    def name(self) -> str:
+        return f"{self._primary.name} -> {self._fallback.name}"
+
+    def is_available(self) -> bool:
+        return self._primary.is_available() or self._fallback.is_available()
+
+    def search_company(self, company_name, ts_code, market="A股", industry=""):
+        primary_result = None
+        if self._primary.is_available():
+            primary_result = self._primary.search_company(company_name, ts_code, market, industry)
+            if primary_result.get("status") == "success":
+                primary_result["source"] = primary_result.get("source", self._primary.name)
+                primary_result["fallback_used"] = False
+                return primary_result
+
+        if self._fallback.is_available():
+            fallback_result = self._fallback.search_company(company_name, ts_code, market, industry)
+            fallback_result["fallback_used"] = True
+            fallback_result["fallback_reason"] = (
+                primary_result.get("summary") if primary_result else "Tavily未配置或不可用"
+            )
+            fallback_result["source"] = fallback_result.get("source", self._fallback.name)
+            return fallback_result
+
+        return {
+            "status": "no_api_key",
+            "summary": "未配置 Tavily API Key，且 AI 服务不可用，跳过互联网研究",
+            "sections": {},
+        }

@@ -1,0 +1,8 @@
+interface:
+  display_name: "中国证券分析"
+  short_description: "生成A股、港股和ETF深度分析报告"
+  brand_color: "#8B1A1A"
+  default_prompt: "Use $securities-analysis-cn to analyze 贵州茅台 and generate a professional PDF report."
+
+policy:
+  allow_implicit_invocation: true

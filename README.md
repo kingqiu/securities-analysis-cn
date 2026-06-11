@@ -14,7 +14,8 @@ AI Agent Skill：中国证券（A股/港股/ETF）深度分析报告自动生成
 ## 安装
 
 ```bash
-pip install requests pandas matplotlib reportlab numpy python-dotenv --break-system-packages
+pip install -r requirements.txt
+python3 scripts/check_env.py
 ```
 
 ## 配置
@@ -27,6 +28,20 @@ cp .env.example .env
 ```
 
 > 若无 AI API Key，报告仍可生成，AI 建议会降级为规则化量化建议。
+
+## 专业投研模型
+
+A股报告的投资建议不再直接让大模型“拍脑袋”给买卖结论，而是先由 `analyst_model.py` 基于估值、盈利质量、成长性、资金技术面和风险项生成结构化结论：
+
+- 评级与 6-12 个月周期
+- 谨慎/中性/乐观价值区间
+- 安全边际买入区、观察区、分批止盈区、复盘止损位
+- 分批建仓/观察/止盈的仓位计划
+- 风险收益比、核心正向证据、主要风险和反证条件
+
+大模型只负责解释该模型结论和组织语言，不应擅自改评级、目标价或交易区间。
+
+同行对比也会通过 `peer_model.py` 识别市值龙头、质量标杆和估值锚，用来判断目标公司相对行业龙头是低估机会，还是基本面折价。
 
 ### 切换 AI 大模型
 
@@ -41,11 +56,12 @@ OPENAI_MODEL=gpt-4o                        # 或 deepseek-chat
 
 ### 切换搜索引擎
 
-默认使用 AI 知识库总结，可切换为 Tavily 搜索或禁用：
+默认使用 `auto`：优先 Tavily 获取最新公司新闻和行业动态，Tavily 未配置或服务不可用时才降级为 AI 整理；也可以强制禁用：
 
 ```env
-SEARCH_PROVIDER=tavily     # 或 none 禁用
+SEARCH_PROVIDER=auto       # Tavily 优先，AI 降级
 TAVILY_API_KEY=your_key
+# SEARCH_PROVIDER=none     # 禁用互联网研究
 ```
 
 ## 使用
@@ -100,7 +116,7 @@ python3 run_analysis.py 600519 000858 000596  # 多只对比
 |------|---------|--------|------|
 | 数据源 | `DATA_PROVIDER` | `tushare`（默认） | 行情/财务/股东数据 |
 | AI模型 | `LLM_PROVIDER` | `minimax`（默认）、`openai` | 投资建议生成 |
-| 搜索引擎 | `SEARCH_PROVIDER` | `ai_summary`（默认）、`tavily`、`none` | 公司研究信息 |
+| 搜索引擎 | `SEARCH_PROVIDER` | `auto`（默认）、`tavily`、`ai_summary`、`none` | 公司新闻和行业动态 |
 
 扩展新 provider 只需：继承 `providers/base.py` 中的基类 → 实现接口 → 在 `providers/__init__.py` 注册。
 

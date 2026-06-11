@@ -14,7 +14,8 @@ Supports three markets:
 ## Installation
 
 ```bash
-pip install requests pandas matplotlib reportlab numpy python-dotenv --break-system-packages
+pip install -r requirements.txt
+python3 scripts/check_env.py
 ```
 
 ## Configuration
@@ -27,6 +28,20 @@ cp .env.example .env
 ```
 
 > If no AI API Key is provided, reports will still generate with rule-based quantitative advice.
+
+## Analyst Model
+
+A-share recommendations are no longer delegated directly to the LLM. `analyst_model.py` first builds a structured research view from valuation, quality, growth, funds/technical, and risk signals:
+
+- rating with a 6-12 month horizon
+- bear/base/bull fair value range
+- safety-margin buy zone, watch zone, take-profit zone, and review stop
+- position plan for staged entry, observation, or staged exit
+- risk/reward, positive evidence, major risks, and rebuttal conditions
+
+The LLM should explain this model output, not override ratings, target prices, or trading zones.
+
+Peer comparison is also handled by `peer_model.py`, which identifies market-cap leaders, quality benchmarks, and valuation anchors to judge whether the target's discount is an opportunity or a fundamental discount.
 
 ### Switch AI Model
 
@@ -44,8 +59,9 @@ OPENAI_MODEL=gpt-4o                        # or deepseek-chat
 Default: AI knowledge summary. Switch to Tavily search or disable:
 
 ```env
-SEARCH_PROVIDER=tavily     # or none to disable
+SEARCH_PROVIDER=auto       # Tavily first, AI fallback
 TAVILY_API_KEY=your_key
+# SEARCH_PROVIDER=none     # disable internet research
 ```
 
 ## Usage
@@ -85,7 +101,7 @@ Three core components are independently swappable via `.env` configuration:
 |-----------|-------------|---------|--------|
 | Data Source | `DATA_PROVIDER` | `tushare` (default) | Market/financial/shareholder data |
 | AI Model | `LLM_PROVIDER` | `minimax` (default), `openai` | Investment advice generation |
-| Search | `SEARCH_PROVIDER` | `ai_summary` (default), `tavily`, `none` | Company research |
+| Search | `SEARCH_PROVIDER` | `auto` (default), `tavily`, `ai_summary`, `none` | Company news and industry dynamics |
 
 To add a new provider: inherit from base class in `providers/base.py` → implement interface → register in `providers/__init__.py`.
 

@@ -7,32 +7,51 @@ import requests
 import json
 from datetime import datetime, timedelta
 import time
-from config import TUSHARE_API_URL as API_URL, TUSHARE_API_TOKEN as API_TOKEN, STOCK_DAILY_DAYS, STOCK_FINANCIAL_YEARS
+from config import (
+    TUSHARE_API_URL as API_URL,
+    TUSHARE_API_TOKEN as API_TOKEN,
+    STOCK_DAILY_DAYS,
+    STOCK_FINANCIAL_YEARS,
+    ENABLE_OPTIONAL_CONCEPTS,
+    ENABLE_OPTIONAL_MACRO_NEWS,
+)
 from config import api_rate_limiter
 
 api_call_count = 0
 
 
-def call_api(api_name, params, fields=""):
+def _safe_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def call_api(api_name, params, fields="", retries=1):
     global api_call_count
     api_call_count += 1
-    api_rate_limiter.acquire()
     data = {
         "api_name": api_name,
         "token": API_TOKEN,
         "params": params,
         "fields": fields,
     }
-    try:
-        resp = requests.post(API_URL, json=data, headers={"Content-Type": "application/json"}, timeout=30)
-        resp.raise_for_status()
-        result = resp.json()
-        if result.get("code") == 0:
-            return result["data"]
-        else:
-            print(f"  ✗ API错误 ({api_name}): {result.get('msg')}")
-    except Exception as e:
-        print(f"  ✗ API调用失败 ({api_name}): {e}")
+    for attempt in range(retries + 1):
+        api_rate_limiter.acquire()
+        try:
+            resp = requests.post(API_URL, json=data, headers={"Content-Type": "application/json"}, timeout=30)
+            resp.raise_for_status()
+            result = resp.json()
+            if result.get("code") == 0:
+                return result["data"]
+            else:
+                print(f"  ✗ API错误 ({api_name}): {result.get('msg')}")
+                break
+        except Exception as e:
+            if attempt < retries:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            print(f"  ✗ API调用失败 ({api_name}): {e}")
     return None
 
 
@@ -131,29 +150,77 @@ def fetch_stock_data(ts_code: str) -> dict:
                 sb_fields = all_stocks["fields"]
                 sb_idx = {f: i for i, f in enumerate(sb_fields)}
                 code_i = sb_idx.get("ts_code", 0)
+                name_i = sb_idx.get("name", 1)
                 ind_i = sb_idx.get("industry", 4)
 
-                peer_codes = [
-                    item[code_i] for item in all_stocks["items"]
-                    if len(item) > ind_i and item[ind_i] == industry and item[code_i] != ts_code
-                ][:10]
+                peer_candidates = []
+                for item in all_stocks["items"]:
+                    if len(item) > ind_i and item[ind_i] == industry and item[code_i] != ts_code:
+                        peer_candidates.append({
+                            "ts_code": item[code_i],
+                            "name": item[name_i] if len(item) > name_i else item[code_i],
+                        })
+                peer_candidates = peer_candidates[:25]
 
                 peer_start = (datetime.now() - timedelta(days=7)).strftime("%Y%m%d")
                 peer_vals = []
-                for peer_code in peer_codes:
-                    pr = call_api("daily_basic", {"ts_code": peer_code, "start_date": peer_start, "end_date": end_date})
+                for peer in peer_candidates:
+                    peer_code = peer["ts_code"]
+                    pr = call_api("daily_basic", {"ts_code": peer_code, "start_date": peer_start, "end_date": end_date}, retries=2)
                     if pr and pr.get("items"):
                         pf = pr["fields"]
                         pi = {f: i for i, f in enumerate(pf)}
                         latest = pr["items"][0]
                         pe_v = latest[pi["pe_ttm"]] if "pe_ttm" in pi else None
                         pb_v = latest[pi["pb"]] if "pb" in pi else None
-                        peer_vals.append({"ts_code": peer_code, "pe_ttm": pe_v, "pb": pb_v})
+                        mv_v = latest[pi["total_mv"]] if "total_mv" in pi else None
+                        mv_float = _safe_float(mv_v)
+                        peer_vals.append({
+                            "ts_code": peer_code,
+                            "name": peer["name"],
+                            "pe_ttm": pe_v,
+                            "pb": pb_v,
+                            "total_mv": mv_v,
+                            "mv_bn": round(mv_float / 10000, 1) if mv_float is not None else None,
+                        })
+
+                # 选择市值较大的代表性同行补充盈利质量和增长指标，避免API调用量过高。
+                peer_vals = sorted(
+                    peer_vals,
+                    key=lambda p: _safe_float(p.get("total_mv")) or 0,
+                    reverse=True
+                )[:8]
+
+                fina_start = (datetime.now() - timedelta(days=900)).strftime("%Y%m%d")
+                for peer in peer_vals:
+                    fi = call_api("fina_indicator", {
+                        "ts_code": peer["ts_code"],
+                        "start_date": fina_start,
+                        "end_date": end_date,
+                    }, retries=2)
+                    if fi and fi.get("items"):
+                        ff = fi["fields"]
+                        fj = {f: i for i, f in enumerate(ff)}
+                        latest = fi["items"][0]
+                        peer["roe"] = latest[fj["roe"]] if "roe" in fj else None
+                        peer["gross_margin"] = latest[fj["grossprofit_margin"]] if "grossprofit_margin" in fj else None
+                        # Tushare字段在不同网关可能略有差异，按可用字段择优保存。
+                        for src, dst in (
+                            ("tr_yoy", "rev_growth"),
+                            ("or_yoy", "rev_growth"),
+                            ("q_sales_yoy", "rev_growth"),
+                            ("netprofit_yoy", "profit_growth"),
+                            ("q_profit_yoy", "profit_growth"),
+                            ("dt_netprofit_yoy", "profit_growth"),
+                        ):
+                            if src in fj and dst not in peer:
+                                peer[dst] = latest[fj[src]]
 
                 data["industry_peers"] = {
                     "industry": industry,
                     "peers": peer_vals,
                     "trade_date": end_date,
+                    "selection_method": "same industry candidates -> top market-cap representatives with quality metrics",
                 }
                 print(f"  ✓ 行业「{industry}」同类股票: {len(peer_vals)} 只")
             else:
@@ -223,10 +290,13 @@ def fetch_stock_data(ts_code: str) -> dict:
 
     # 18. 概念板块
     print("18/20 获取概念板块...")
-    concept = call_api("concept_detail", {"ts_code": ts_code})
-    if concept and concept.get("items"):
-        data["concepts"] = {"fields": concept["fields"], "items": concept["items"]}
-        print(f"  ✓ {len(concept['items'])} 个概念")
+    if ENABLE_OPTIONAL_CONCEPTS:
+        concept = call_api("concept_detail", {"ts_code": ts_code})
+        if concept and concept.get("items"):
+            data["concepts"] = {"fields": concept["fields"], "items": concept["items"]}
+            print(f"  ✓ {len(concept['items'])} 个概念")
+    else:
+        print("  ○ 已跳过（ENABLE_OPTIONAL_CONCEPTS=1 时启用）")
 
     # 19. 股权质押
     print("19/20 获取股权质押...")
@@ -244,18 +314,21 @@ def fetch_stock_data(ts_code: str) -> dict:
 
     # 21. 央视新闻（宏观环境参考）
     print("21/21 获取宏观新闻...")
-    from datetime import date
-    today_str = date.today().strftime("%Y%m%d")
-    news = call_api("cctv_news", {"date": today_str})
-    if news and news.get("items"):
-        data["macro_news"] = {"fields": news["fields"], "items": news["items"][:10]}
-        print(f"  ✓ {len(data['macro_news']['items'])} 条")
-    else:
-        yesterday = (date.today() - timedelta(days=1)).strftime("%Y%m%d")
-        news = call_api("cctv_news", {"date": yesterday})
+    if ENABLE_OPTIONAL_MACRO_NEWS:
+        from datetime import date
+        today_str = date.today().strftime("%Y%m%d")
+        news = call_api("cctv_news", {"date": today_str})
         if news and news.get("items"):
             data["macro_news"] = {"fields": news["fields"], "items": news["items"][:10]}
-            print(f"  ✓ {len(data['macro_news']['items'])} 条（昨日）")
+            print(f"  ✓ {len(data['macro_news']['items'])} 条")
+        else:
+            yesterday = (date.today() - timedelta(days=1)).strftime("%Y%m%d")
+            news = call_api("cctv_news", {"date": yesterday})
+            if news and news.get("items"):
+                data["macro_news"] = {"fields": news["fields"], "items": news["items"][:10]}
+                print(f"  ✓ {len(data['macro_news']['items'])} 条（昨日）")
+    else:
+        print("  ○ 已跳过（ENABLE_OPTIONAL_MACRO_NEWS=1 时启用；行业新闻优先使用 Tavily）")
 
     print(f"\n✓ 数据获取完成，共调用 {api_call_count} 次 API")
     return data

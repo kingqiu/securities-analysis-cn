@@ -115,7 +115,7 @@ def run(user_input: str):
         print(f"\n  → 正在进行互联网研究（{search_provider.name}）...")
         try:
             market_label = "A股" if code_type == "stock" else "港股"
-            research = search_provider.search_company(stock_name, ts_code, market_label)
+            research = search_provider.search_company(stock_name, ts_code, market_label, meta.get("industry", ""))
             if research.get("status") == "success":
                 result["web_research"] = research
                 print(f"  ✓ 互联网研究完成")
@@ -245,7 +245,7 @@ def run_comparison(inputs: list):
         if code_type in ("stock", "hk_stock") and search_provider.is_available():
             try:
                 market_label = "A股" if code_type == "stock" else "港股"
-                research = search_provider.search_company(stock_name, ts_code, market_label)
+                research = search_provider.search_company(stock_name, ts_code, market_label, meta.get("industry", ""))
                 if research.get("status") == "success":
                     result["web_research"] = research
             except Exception:

@@ -8,6 +8,8 @@ import os
 import tempfile
 from datetime import datetime
 
+os.environ.setdefault("MPLCONFIGDIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".matplotlib-cache"))
+
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -27,8 +29,10 @@ from reportlab.platypus import (
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
+from analyst_model import build_stock_research_view, render_stock_research_brief
 from ai_analysis import get_investment_advice, get_industry_news
 from config import md_to_rl, md_to_story
+from peer_model import build_peer_view, render_peer_brief
 
 # ── 字体注册 ──────────────────────────────────────────────────────────────────
 
@@ -281,8 +285,16 @@ def _industry_comp_valuation(industry_peers, val):
         return {}
 
     peers = industry_peers["peers"]
-    pe_list = [float(p["pe_ttm"]) for p in peers if p.get("pe_ttm") is not None]
-    pb_list = [float(p["pb"]) for p in peers if p.get("pb") is not None]
+    def _to_float(x):
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return None
+
+    pe_list = [_to_float(p.get("pe_ttm")) for p in peers]
+    pb_list = [_to_float(p.get("pb")) for p in peers]
+    pe_list = [v for v in pe_list if v is not None]
+    pb_list = [v for v in pb_list if v is not None]
 
     # 过滤负值（亏损股）
     pe_list = [v for v in pe_list if v > 0]
@@ -421,6 +433,78 @@ def _price_chart(daily_df, index_df, stock_name):
     return _chart_to_image(fig)
 
 
+def _trading_plan_chart(analyst_view, stock_name):
+    """交易计划价格带：买入区、观察区、止盈区、止损复盘位。"""
+    if not analyst_view:
+        return None
+
+    cur = analyst_view.get("cur_price")
+    buy_zone = analyst_view.get("buy_zone")
+    watch_zone = analyst_view.get("watch_zone")
+    take_profit_zone = analyst_view.get("take_profit_zone")
+    stop_loss = analyst_view.get("stop_loss")
+    bear = analyst_view.get("price_bear")
+    base = analyst_view.get("price_base")
+    bull = analyst_view.get("price_bull")
+
+    values = []
+    for item in (cur, stop_loss, bear, base, bull):
+        if item is not None:
+            values.append(float(item))
+    for zone in (buy_zone, watch_zone, take_profit_zone):
+        if zone:
+            values.extend([float(zone[0]), float(zone[1])])
+    if len(values) < 2:
+        return None
+
+    low = min(values)
+    high = max(values)
+    pad = max((high - low) * 0.12, high * 0.03)
+    x_min = max(0, low - pad)
+    x_max = high + pad
+
+    fig, ax = plt.subplots(figsize=(10, 2.8))
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(0, 1)
+    ax.set_yticks([])
+    ax.set_xlabel("价格（元）")
+    ax.set_title(f"{stock_name} 交易计划价格带", fontsize=12)
+
+    bands = [
+        ("安全边际买入区", buy_zone, "#d5f5e3", "#1e8449"),
+        ("观察区", watch_zone, "#fcf3cf", "#b7950b"),
+        ("分批止盈区", take_profit_zone, "#fadbd8", "#922b21"),
+    ]
+    y = 0.46
+    h = 0.28
+    for label, zone, color, edge in bands:
+        if not zone:
+            continue
+        start, end = sorted([float(zone[0]), float(zone[1])])
+        ax.barh(y, end - start, left=start, height=h, color=color, edgecolor=edge, linewidth=1)
+        ax.text((start + end) / 2, y, label, ha="center", va="center", fontsize=9, color=edge)
+
+    marker_specs = [
+        ("复盘止损", stop_loss, "#7b241c", 0.18),
+        ("当前价", cur, "#000000", 0.78),
+        ("谨慎价值", bear, "#7f8c8d", 0.08),
+        ("中性价值", base, "#8b1a1a", 0.90),
+        ("乐观价值", bull, "#c0392b", 0.08),
+    ]
+    for label, value, color, text_y in marker_specs:
+        if value is None:
+            continue
+        value = float(value)
+        ax.axvline(value, color=color, linestyle="--" if label != "当前价" else "-", linewidth=1.2)
+        ax.text(value, text_y, f"{label}\n{value:.2f}", ha="center", va="center", fontsize=8, color=color)
+
+    ax.grid(True, alpha=0.25, axis="x")
+    for spine in ("left", "right", "top"):
+        ax.spines[spine].set_visible(False)
+    fig.tight_layout()
+    return _chart_to_image(fig, width=15*cm)
+
+
 def _revenue_chart(income_df, stock_name):
     df = income_df.copy()
     df["end_date"] = df["end_date"].astype(str)
@@ -483,6 +567,17 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     bs_quality = _balance_sheet_quality(balance_df, fina_df)
     industry_comp = _industry_comp_valuation(d.get("industry_peers"), val)
     scenario = _scenario_analysis(daily_basic, income_df, val)
+    peer_view = build_peer_view({
+        "name": stock_name,
+        "ts_code": d["ts_code"],
+        "mv_bn": val.get("mv_bn"),
+        "pe_ttm": val.get("pe_ttm"),
+        "pb": val.get("pb"),
+        "roe": fin.get("roe"),
+        "gross_margin": fin.get("gross_margin"),
+        "rev_growth": fin.get("rev_growth"),
+        "profit_growth": fin.get("profit_growth"),
+    }, d.get("industry_peers"))
 
     # 计算增强指标
     # 主力资金净流入(近20日合计)
@@ -551,8 +646,8 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
             fc_max = fc.get("p_change_max", "")
             forecast_info = f"{fc_type}（变动幅度{fc_min}%~{fc_max}%）"
 
-    # AI 买卖建议（增强版）
-    advice_text = get_investment_advice("stock", {
+    # 专业投研模型 + AI 买卖建议（增强版）
+    stock_summary = {
         "name": stock_name,
         "ts_code": d["ts_code"],
         "industry": industry,
@@ -579,7 +674,11 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
         "price_bear": scenario.get("price_bear", "N/A") if scenario else "N/A",
         "cur_price": scenario.get("cur_price", "N/A") if scenario else "N/A",
         "forecast_info": forecast_info,
-    })
+        "peer_context": render_peer_brief(peer_view) if peer_view else "同行龙头数据不足",
+    }
+    analyst_view = build_stock_research_view(stock_summary)
+    analyst_brief = render_stock_research_brief(analyst_view)
+    advice_text = get_investment_advice("stock", stock_summary)
 
     doc = SimpleDocTemplate(
         output_path, pagesize=A4,
@@ -612,8 +711,34 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     story.append(Spacer(1, 0.3*cm))
 
     # ── 二、买卖建议（AI） ──
-    story.append(Paragraph("二、投资建议（AI分析）", st["h1"]))
-    story.append(Paragraph("以下建议由 MiniMax-M2.7 模型基于量化数据自动生成，仅供参考，不构成投资依据。", st["caption"]))
+    story.append(Paragraph("二、投资建议与交易计划", st["h1"]))
+    story.append(Paragraph("以下结论由量化投研模型先生成，AI 仅负责解释与组织语言；仅供研究参考，不构成投资依据。", st["caption"]))
+    story.append(Spacer(1, 0.2*cm))
+    plan_chart = _trading_plan_chart(analyst_view, stock_name)
+    if plan_chart:
+        story.append(plan_chart)
+        story.append(Paragraph("图：交易计划价格带。价格区间用于复盘和仓位管理，不代表确定性买卖点。", st["caption"]))
+        story.append(Spacer(1, 0.2*cm))
+
+    plan_rows = [["区间/触发器", "价格", "建议动作"]]
+    if analyst_view.get("buy_zone"):
+        z = analyst_view["buy_zone"]
+        plan_rows.append(["安全边际买入区", f"{z[0]:.2f}-{z[1]:.2f}元", "可考虑分批建仓，控制单次仓位"])
+    if analyst_view.get("watch_zone"):
+        z = analyst_view["watch_zone"]
+        plan_rows.append(["观察区", f"{z[0]:.2f}-{z[1]:.2f}元", "等待回调或基本面催化确认"])
+    if analyst_view.get("take_profit_zone"):
+        z = analyst_view["take_profit_zone"]
+        plan_rows.append(["分批止盈区", f"{z[0]:.2f}-{z[1]:.2f}元", "降低预期收益，分批兑现或复盘持有理由"])
+    if analyst_view.get("stop_loss") is not None:
+        plan_rows.append(["复盘止损位", f"{analyst_view['stop_loss']:.2f}元", "跌破后重新检查业绩、估值和趋势假设"])
+    if len(plan_rows) > 1:
+        story.append(_tbl(plan_rows, col_widths=[4*cm, 4*cm, 8*cm]))
+        story.append(Spacer(1, 0.2*cm))
+
+    story.extend(md_to_story(analyst_brief, st["body"], table_builder=_tbl))
+    story.append(Spacer(1, 0.2*cm))
+    story.append(Paragraph("AI 解读", st["h2"]))
     story.append(Spacer(1, 0.2*cm))
     story.extend(md_to_story(advice_text, st["body"], table_builder=_tbl))
     story.append(Spacer(1, 0.3*cm))
@@ -693,9 +818,9 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
         story.append(_tbl(bs_rows, col_widths=[3*cm, 4.5*cm, 4.5*cm]))
         story.append(Spacer(1, 0.3*cm))
 
-    # ── 六、行业可比估值 ──
+    # ── 六、同行龙头与估值锚对比 ──
     if industry_comp:
-        story.append(Paragraph("六、行业可比估值", st["h1"]))
+        story.append(Paragraph("六、同行龙头与估值锚对比", st["h1"]))
         story.append(Paragraph(
             f"行业：{industry_comp.get('industry','')}　同类股票数：{industry_comp.get('peer_count',0)} 只",
             st["body"]
@@ -721,6 +846,40 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
         ])
         story.append(_tbl(ic_rows, col_widths=[2*cm, 2*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.5*cm]))
         story.append(Spacer(1, 0.3*cm))
+
+        if peer_view:
+            story.extend(md_to_story(render_peer_brief(peer_view), st["body"], table_builder=_tbl))
+            story.append(Spacer(1, 0.2*cm))
+
+            target = peer_view.get("target", {})
+            peer_rows = [["角色", "名称", "市值(亿)", "PE", "PB", "ROE", "毛利率", "净利增速"]]
+            peer_rows.append([
+                target.get("role", "目标公司"),
+                target.get("name", stock_name),
+                f"{target.get('mv_bn'):.1f}" if target.get("mv_bn") is not None else "N/A",
+                f"{target.get('pe_ttm'):.1f}" if target.get("pe_ttm") is not None else "N/A",
+                f"{target.get('pb'):.1f}" if target.get("pb") is not None else "N/A",
+                f"{target.get('roe'):.1f}%" if target.get("roe") is not None else "N/A",
+                f"{target.get('gross_margin'):.1f}%" if target.get("gross_margin") is not None else "N/A",
+                f"{target.get('profit_growth'):.1f}%" if target.get("profit_growth") is not None else "N/A",
+            ])
+            for p in peer_view.get("peer_rows", [])[:6]:
+                peer_rows.append([
+                    p.get("role", "直接可比"),
+                    p.get("name", p.get("ts_code", "")),
+                    f"{p.get('mv_bn'):.1f}" if p.get("mv_bn") is not None else "N/A",
+                    f"{p.get('pe_ttm'):.1f}" if p.get("pe_ttm") is not None else "N/A",
+                    f"{p.get('pb'):.1f}" if p.get("pb") is not None else "N/A",
+                    f"{p.get('roe'):.1f}%" if p.get("roe") is not None else "N/A",
+                    f"{p.get('gross_margin'):.1f}%" if p.get("gross_margin") is not None else "N/A",
+                    f"{p.get('profit_growth'):.1f}%" if p.get("profit_growth") is not None else "N/A",
+                ])
+            story.append(_tbl(peer_rows, col_widths=[2.5*cm, 3*cm, 2*cm, 1.6*cm, 1.6*cm, 1.8*cm, 1.8*cm, 2*cm]))
+            story.append(Paragraph(
+                "说明：龙头参照用于判断行业定价锚和质量上限；若目标公司估值显著低于龙头，需要进一步判断是低估机会，还是商业模式、成长性、治理或现金流折价。",
+                st["caption"]
+            ))
+            story.append(Spacer(1, 0.3*cm))
 
     # ── 七、三情景分析 ──
     if scenario and scenario.get("cur_price"):
@@ -765,7 +924,7 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
         mbz = mainbz_product.copy()
         mbz["end_date"] = mbz["end_date"].astype(str)
         latest_period = mbz["end_date"].max()
-        mbz_latest = mbz[mbz["end_date"] == latest_period]
+        mbz_latest = mbz[mbz["end_date"] == latest_period].copy()
         mbz_latest["bz_sales"] = pd.to_numeric(mbz_latest.get("bz_sales", 0), errors="coerce")
         mbz_latest["bz_profit"] = pd.to_numeric(mbz_latest.get("bz_profit", 0), errors="coerce")
         total_sales = mbz_latest["bz_sales"].sum()
@@ -789,7 +948,7 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
             story.append(Paragraph("按地区分布", st["h2"]))
             mbr = mainbz_region.copy()
             mbr["end_date"] = mbr["end_date"].astype(str)
-            mbr_latest = mbr[mbr["end_date"] == mbr["end_date"].max()]
+            mbr_latest = mbr[mbr["end_date"] == mbr["end_date"].max()].copy()
             mbr_latest["bz_sales"] = pd.to_numeric(mbr_latest.get("bz_sales", 0), errors="coerce")
             total_r = mbr_latest["bz_sales"].sum()
             mbr_rows = [["地区", "营业收入（亿）", "营收占比"]]
@@ -927,7 +1086,18 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     if web_research and web_research.get("sections"):
         story.append(PageBreak())
         story.append(Paragraph("十四、公司研究与行业动态", st["h1"]))
-        story.append(Paragraph("以下信息由 AI 基于公开信息整理，仅供参考，请以官方公告为准。", st["caption"]))
+        source_name = web_research.get("source", "公开搜索")
+        source_count = len(web_research.get("sources", []))
+        if web_research.get("fallback_used"):
+            caption = f"Tavily 未配置或不可用，本页使用 AI 降级整理（来源：{source_name}），仅供参考，请以官方公告为准。"
+        elif web_research.get("structured_without_llm"):
+            caption = f"以下为基于 Tavily 来源的结构化情报摘要（来源：{source_name}，参考来源{source_count}条）；日期未标明的信息仅作背景，请以官方公告为准。"
+        else:
+            caption = f"以下信息由 Tavily 公开搜索结果整理（来源：{source_name}，参考来源{source_count}条），仅供参考，请以官方公告为准。"
+        story.append(Paragraph(
+            caption,
+            st["caption"],
+        ))
         story.append(Spacer(1, 0.2*cm))
 
         sections = web_research["sections"]
@@ -946,19 +1116,20 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
                 story.append(Spacer(1, 0.2*cm))
 
     # ── 十五、行业与公司动态 ──
-    story.append(Paragraph("十五、行业与公司动态", st["h1"]))
-    story.append(Paragraph(
-        f"以下为 AI 基于公开信息整理的{stock_name}所在行业近期动态，仅供参考。",
-        st["caption"]
-    ))
-    story.append(Spacer(1, 0.2*cm))
-    try:
-        _industry = basic.get("industry", "未知") if basic else "未知"
-        industry_news = get_industry_news(stock_name, d["ts_code"], _industry, "A股")
-        story.extend(md_to_story(industry_news, st["body"], table_builder=_tbl))
-    except Exception as e:
-        story.append(Paragraph(f"行业动态获取失败：{e}", st["body"]))
-    story.append(Spacer(1, 0.3*cm))
+    if not (web_research and web_research.get("sections")):
+        story.append(Paragraph("十五、行业与公司动态", st["h1"]))
+        story.append(Paragraph(
+            f"以下优先通过搜索服务获取{stock_name}所在行业近期动态；搜索不可用时才降级为AI整理，仅供参考。",
+            st["caption"]
+        ))
+        story.append(Spacer(1, 0.2*cm))
+        try:
+            _industry = basic.get("industry", "未知") if basic else "未知"
+            industry_news = get_industry_news(stock_name, d["ts_code"], _industry, "A股")
+            story.extend(md_to_story(industry_news, st["body"], table_builder=_tbl))
+        except Exception as e:
+            story.append(Paragraph(f"行业动态获取失败：{e}", st["body"]))
+        story.append(Spacer(1, 0.3*cm))
 
     # ── 十六、审计与合规 ──
     if audit_df is not None and not audit_df.empty:
