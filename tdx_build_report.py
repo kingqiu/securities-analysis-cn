@@ -131,6 +131,22 @@ TOP10_HOLDERS_ENDDATE = "20260331"
 # 注：step4 的 dividend 块需逐年(end_date,cash_div_tax,stk_div)，需 fixedTag="fh" 另取；暂记汇总，留后续。
 DIVIDEND_OVERVIEW = {"股息率": 4.28, "支付率": 79, "累计派息": 401145437253, "分红次数": 30}
 
+# tdxf10_gg_fhrz fixedTag=fh 分红明细表（实施方案，含现金派息）：
+# (end_date, cash_div_tax每股税前/元, stk_div送转每股, div_proc, ann_dateYYYYMMDD)
+# cash_div_tax 由 "10派X元" 解析为 X/10；茅台近年一年两次派息
+DIVIDEND_ROWS = [
+    ("20251231", 28.02423, 0.0, "实施方案", "20260417"),
+    ("20250930", 23.957,   0.0, "实施方案", "20251106"),
+    ("20241231", 27.673,   0.0, "实施方案", "20250403"),
+    ("20240930", 23.882,   0.0, "实施方案", "20241109"),
+    ("20231231", 30.876,   0.0, "实施方案", "20240403"),
+    ("20231121", 19.106,   0.0, "实施方案", "20231121"),
+    ("20221231", 25.911,   0.0, "实施方案", "20230331"),
+    ("20221129", 21.91,    0.0, "实施方案", "20221129"),
+    ("20211231", 21.675,   0.0, "实施方案", "20220331"),
+    ("20201231", 19.293,   0.0, "实施方案", "20210331"),
+]
+
 
 # ============================================================
 # 行情拉取（AkShare，免 token）
@@ -286,6 +302,10 @@ def build_intermediate(daily_df: pd.DataFrame, index_df: pd.DataFrame) -> dict:
                 [TOP10_HOLDERS_ENDDATE, name, amt, round(amt / SHARES * 100, 2)]
                 for name, amt in TOP10_HOLDERS
             ],
+        },
+        "dividend": {
+            "fields": ["end_date", "cash_div_tax", "div_proc", "stk_div", "ann_date"],
+            "items": [list(r) for r in DIVIDEND_ROWS],
         },
         "realtime_quote": {"price": PRICE_NOW, "source": "tdx_quotes"},
         "_data_source": "TDX MCP (financials) + AkShare (daily bars); zero token",
