@@ -46,7 +46,27 @@ INCOME_ANNUAL = [
     ("20241231", 174144069958.25, 86228146421.62, 13789482367.98),
     ("20251231", 172054171890.91, 82320067101.68, 14892277570.91),
 ]
-TTM_NET_PROFIT = 82320067101.68   # 2025年报归母净利（近 120 个交易日均在 2026 年，TTM 近似）
+TTM_NET_PROFIT = 82320067101.68   # 2025年报归母净利（fallback，当无更早检查点命中时用）
+
+# TTM-as-of-date 检查点：(报告可获取日YYYYMMDD, 该时点TTM归母净利/元)
+# 由 ph_agf10_cw_lyb 季度累计归母净利推算：TTM = 上年年报 + 本年YTD - 上年同期YTD
+#   2025Q3 可获取(2025-10-31): 2024年报+2025Q3-2024Q3 = 86228146421.62+64626746712.18-60827552118.51
+#   2025年报可获取(2026-03-28): 82320067101.68
+#   2026Q1 可获取(2026-04-30): 2025年报+2026Q1-2025Q1 = 82320067101.68+27242512886.45-26847474238.76
+TTM_CHECKPOINTS = [
+    ("20251031", 90027341015.29),
+    ("20260328", 82320067101.68),
+    ("20260430", 82715105749.37),
+]
+
+
+def ttm_as_of(trade_date: str) -> float:
+    """按交易日返回当时可获取的最新 TTM 归母净利。"""
+    ttm = TTM_NET_PROFIT
+    for ck_date, ck_val in TTM_CHECKPOINTS:
+        if trade_date >= ck_date:
+            ttm = ck_val
+    return ttm
 
 # ph_agf10_cw_xjllb 年报： (end_date, 经营活动现金流量净额)  单位：元  → cfo_ratio
 CASHFLOW_ANNUAL = [
@@ -82,6 +102,35 @@ MONEYFLOW_20D = [
     ("20260616", -478451456.0),
 ]
 
+# tdx_indicator_select 白酒同业 (ts_code, name, pe_ttm, pb, total_mv)  → industry_peers / industry_pe_pct
+INDUSTRY_PEERS = [
+    ("000858.SZ", "五粮液",   32.9281, 2.3036, 294846955520),
+    ("002304.SZ", "洋河股份", 27.0825, 1.2133, 59745611776),
+    ("000568.SZ", "泸州老窖", 11.2621, 2.3639, 121976479744),
+    ("600809.SH", "山西汾酒", 11.8078, 3.2117, 144602349568),
+    ("000596.SZ", "古井贡酒", 13.1856, 1.7913, 46796955648),
+]
+
+# tdxf10_gg_gdyj ltgd 最新报告期(2026-03-31)十大流通股东 (holder_name, hold_amount/股)
+# hold_ratio 由脚本用 hold_amount/SHARES 计算 → "十三、股东结构"章节
+TOP10_HOLDERS = [
+    ("中国贵州茅台酒厂(集团)有限责任公司", 681282935),
+    ("香港中央结算有限公司", 58733069),
+    ("贵州省国有资本运营有限责任公司", 56996777),
+    ("贵州茅台酒厂(集团)技术开发有限公司", 27849688),
+    ("中央汇金资产管理有限责任公司", 10397104),
+    ("中国银行股份有限公司-招商中证白酒指数分级证券投资基金", 5083356),
+    ("中国工商银行股份有限公司-华泰柏瑞沪深300交易型开放式指数证券投资基金", 5038482),
+    ("中国工商银行-上证50交易型开放式指数证券投资基金", 4566446),
+    ("中国证券金融股份有限公司", 4037539),
+    ("国丰兴华(北京)私募-鸿鹄志远(上海)私募投资基金", 4073882),
+]
+TOP10_HOLDERS_ENDDATE = "20260331"
+
+# tdxf10_gg_fhrz pxmz 分红概览（汇总，非逐年）：股息率4.28% / 支付率79% / 累计派息4011亿 / 分红30次
+# 注：step4 的 dividend 块需逐年(end_date,cash_div_tax,stk_div)，需 fixedTag="fh" 另取；暂记汇总，留后续。
+DIVIDEND_OVERVIEW = {"股息率": 4.28, "支付率": 79, "累计派息": 401145437253, "分红次数": 30}
+
 
 # ============================================================
 # 行情拉取（AkShare，免 token）
@@ -97,6 +146,30 @@ def fetch_daily(code: str, days: int = 130) -> pd.DataFrame:
     for c in ("close", "high", "low", "vol"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df.reset_index(drop=True)
+
+
+def fetch_hk_daily_yfinance(code: str, days: int = 130) -> pd.DataFrame:
+    """港股日K兜底（yfinance）。TDX 不支持港股实时/K线，故用 yfinance。
+    注：当前沙箱 TLS 拦截 finance.yahoo.com，返回空；无封锁环境可用。
+    code 形如 '00700' -> yfinance '0700.HK'。"""
+    try:
+        import yfinance as yf
+        sym = f"{int(code)}.HK"
+        df = yf.download(sym, period=f"{int(days*1.6)}d", interval="1d",
+                         progress=False, auto_adjust=True)
+        if df is None or df.empty:
+            return pd.DataFrame(columns=["trade_date", "close", "high", "low", "vol"])
+        df = df.reset_index()
+        df = df.rename(columns={"Date": "trade_date", "Close": "close",
+                                "High": "high", "Low": "low", "Volume": "vol"})
+        df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "")
+        df = df[["trade_date", "close", "high", "low", "vol"]].tail(days)
+        for c in ("close", "high", "low", "vol"):
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        return df.reset_index(drop=True)
+    except Exception as e:
+        print(f"  [warn] yfinance 港股日K失败({code}): {e}")
+        return pd.DataFrame(columns=["trade_date", "close", "high", "low", "vol"])
 
 
 def fetch_index(days: int = 130) -> pd.DataFrame:
@@ -155,9 +228,9 @@ def build_fina_indicator():
 
 
 def build_intermediate(daily_df: pd.DataFrame, index_df: pd.DataFrame) -> dict:
-    # daily_basic：个股日 PE-TTM = close*总股本/TTM归母净利；pb=close*总股本/净资产；total_mv=close*总股本
+    # daily_basic：个股日 PE-TTM = close*总股本/TTM归母净利(as-of-date)；pb=close*总股本/净资产；total_mv=close*总股本
     db = daily_df[["trade_date", "close"]].copy()
-    db["pe_ttm"] = (db["close"] * SHARES / TTM_NET_PROFIT).round(2)
+    db["pe_ttm"] = db.apply(lambda r: round(r["close"] * SHARES / ttm_as_of(r["trade_date"]), 2), axis=1)
     db["pb"] = (db["close"] * SHARES / NET_ASSETS).round(2)
     db["total_mv"] = (db["close"] * SHARES).round(0)
     db = db[["trade_date", "pe_ttm", "pb", "total_mv", "close"]]
@@ -199,6 +272,20 @@ def build_intermediate(daily_df: pd.DataFrame, index_df: pd.DataFrame) -> dict:
         "moneyflow": {
             "fields": ["trade_date", "net_mf_amount"],
             "items": [list(r) for r in MONEYFLOW_20D],
+        },
+        "industry_peers": {
+            "industry": INDUSTRY,
+            "peers": [
+                {"ts_code": r[0], "name": r[1], "pe_ttm": r[2], "pb": r[3], "total_mv": r[4]}
+                for r in INDUSTRY_PEERS
+            ],
+        },
+        "top10_holders": {
+            "fields": ["end_date", "holder_name", "hold_amount", "hold_ratio"],
+            "items": [
+                [TOP10_HOLDERS_ENDDATE, name, amt, round(amt / SHARES * 100, 2)]
+                for name, amt in TOP10_HOLDERS
+            ],
         },
         "realtime_quote": {"price": PRICE_NOW, "source": "tdx_quotes"},
         "_data_source": "TDX MCP (financials) + AkShare (daily bars); zero token",
