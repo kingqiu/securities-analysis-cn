@@ -48,6 +48,40 @@ INCOME_ANNUAL = [
 ]
 TTM_NET_PROFIT = 82320067101.68   # 2025年报归母净利（近 120 个交易日均在 2026 年，TTM 近似）
 
+# ph_agf10_cw_xjllb 年报： (end_date, 经营活动现金流量净额)  单位：元  → cfo_ratio
+CASHFLOW_ANNUAL = [
+    ("20201231", 51669068693.03),
+    ("20211231", 64028676147.37),
+    ("20221231", 36698595830.03),
+    ("20231231", 66593247721.09),
+    ("20241231", 92463692168.43),
+    ("20251231", 61522204989.35),
+]
+
+# tdxf10_gg_jyds zjlx 近20日主力资金流： (trade_date, 主力净额金额/元)  → net_mf_20d（新->旧）
+MONEYFLOW_20D = [
+    ("20260714", 65443584.0),
+    ("20260713", -118832384.0),
+    ("20260710", 786008320.0),
+    ("20260709", -364380160.0),
+    ("20260708", 119559680.0),
+    ("20260707", -193416704.0),
+    ("20260706", 159107072.0),
+    ("20260703", -49765120.0),
+    ("20260702", 233384448.0),
+    ("20260701", 213938176.0),
+    ("20260630", -41502336.0),
+    ("20260629", 213993472.0),
+    ("20260626", -500410112.0),
+    ("20260625", -13479168.0),
+    ("20260624", -40602112.0),
+    ("20260623", -180355072.0),
+    ("20260622", 319767040.0),
+    ("20260618", -990900224.0),
+    ("20260617", -481104128.0),
+    ("20260616", -478451456.0),
+]
+
 
 # ============================================================
 # 行情拉取（AkShare，免 token）
@@ -157,6 +191,14 @@ def build_intermediate(daily_df: pd.DataFrame, index_df: pd.DataFrame) -> dict:
         "fina_indicator": {
             "fields": ["end_date", "roe", "grossprofit_margin", "debt_to_assets"],
             "items": build_fina_indicator(),
+        },
+        "cashflow": {
+            "fields": ["end_date", "n_cashflow_act"],
+            "items": [list(r) for r in CASHFLOW_ANNUAL],
+        },
+        "moneyflow": {
+            "fields": ["trade_date", "net_mf_amount"],
+            "items": [list(r) for r in MONEYFLOW_20D],
         },
         "realtime_quote": {"price": PRICE_NOW, "source": "tdx_quotes"},
         "_data_source": "TDX MCP (financials) + AkShare (daily bars); zero token",
