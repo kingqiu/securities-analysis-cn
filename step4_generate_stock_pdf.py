@@ -7,7 +7,7 @@ import json
 import os
 import re
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 
 os.environ.setdefault("MPLCONFIGDIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".matplotlib-cache"))
 
@@ -684,7 +684,6 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     # 业绩预告（只取近1年内的）
     forecast_info = "暂无近期业绩预告"
     if forecast_df is not None and not forecast_df.empty:
-        from datetime import datetime, timedelta
         _one_year_ago = (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
         _fc_recent = forecast_df[forecast_df["ann_date"].astype(str) >= _one_year_ago]
         if not _fc_recent.empty:
@@ -1169,7 +1168,6 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     # ── 十一、业绩预告 ──
     story.append(Paragraph("十一、业绩预告", st["h1"]))
     if forecast_df is not None and not forecast_df.empty:
-        from datetime import datetime, timedelta
         one_year_ago = (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
         fc = forecast_df.sort_values("ann_date", ascending=False).copy()
         fc = fc[fc["ann_date"].astype(str) >= one_year_ago]
