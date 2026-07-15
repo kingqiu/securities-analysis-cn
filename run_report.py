@@ -123,6 +123,17 @@ def build_stock(code, fin):
         data["moneyflow"] = {"fields": ["trade_date","net_mf_amount"], "items": [list(r) for r in fin["moneyflow_20d"]]}
     if "industry_peers" in fin:
         data["industry_peers"] = {"industry": industry, "peers": fin["industry_peers"]}
+    if "top10_holders" in fin:
+        t10_end = fin.get("top10_end_date", "")
+        data["top10_holders"] = {
+            "fields": ["end_date","holder_name","hold_amount","hold_ratio"],
+            "items": [[t10_end, name, amt, round(amt / shares * 100, 2)] for name, amt in fin["top10_holders"]],
+        }
+    if "dividend_rows" in fin:
+        data["dividend"] = {
+            "fields": ["end_date","cash_div_tax","div_proc","stk_div","ann_date"],
+            "items": [list(r) for r in fin["dividend_rows"]],
+        }
 
     out_json = os.path.join(PROJECT_DIR, f"temp_{code}_data.json")
     with open(out_json, "w", encoding="utf-8") as f:
