@@ -132,18 +132,48 @@ def build_stock(code, fin):
         "daily": {"fields": list(daily.columns), "items": _items(daily)},
         "daily_basic": {"fields": ["trade_date","pe_ttm","pb","total_mv","close"], "items": _items(db)},
         "index_daily": {"fields": ["trade_date","close"], "items": _items(index)},
-        "income": {"fields": ["end_date","total_revenue","n_income_attr_p"],
-                   "items": [[r[0], r[1], r[2]] for r in income]},
+        "income": {"fields": ["end_date","total_revenue","oper_cost","n_income_attr_p"],
+                   "items": [[r[0], r[1], r[3], r[2]] for r in income]},
         "fina_indicator": {"fields": ["end_date","roe","grossprofit_margin","debt_to_assets"], "items": fina_rows},
         "realtime_quote": {"price": price, "source": "tdx_quotes"},
         "dupont": dupont,
     }
+
+    # 公司画像（用于赚钱机制拆解）
+    data["profile"] = {
+        "fields": ["shares","total_assets","net_assets"],
+        "items": [[shares, total_assets, net_assets]],
+    }
+
+    # P1-11：数据来源清单
+    fetch_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+    research_file = os.path.join(PROJECT_DIR, "tdx_raw", f"{code}_research.json")
+    sources = [
+        {"item": "行情/市值/PE·PB", "source": "AkShare 新浪日线 + TDX quotes", "time": fetch_time},
+        {"item": "利润表(营收/成本/净利)", "source": "TDX ph_agf10_cw_lyb", "time": fetch_time},
+        {"item": "现金流量表", "source": "TDX ph_agf10_cw_xjllb", "time": fetch_time},
+        {"item": "资金流向(主力净流入)", "source": "TDX tdxf10_gg_jyds", "time": fetch_time},
+        {"item": "十大流通股东", "source": "TDX tdxf10_gg_gdyj", "time": fetch_time},
+        {"item": "分红送股", "source": "TDX tdxf10_gg_fhrz", "time": fetch_time},
+        {"item": "同行估值与市值", "source": "TDX tdx_indicator_select", "time": fetch_time},
+        {"item": "杜邦/估值/分位计算", "source": "本地规则化计算（零 token）", "time": fetch_time},
+    ]
+    if os.path.exists(research_file):
+        sources.append({"item": "互联网研究(研报/新闻/公告/宏观)", "source": "TDX wenda 检索", "time": fetch_time})
+    data["data_sources"] = sources
     if "cashflow_annual" in fin:
         data["cashflow"] = {"fields": ["end_date","n_cashflow_act"], "items": [list(r) for r in fin["cashflow_annual"]]}
     if "moneyflow_20d" in fin:
         data["moneyflow"] = {"fields": ["trade_date","net_mf_amount"], "items": [list(r) for r in fin["moneyflow_20d"]]}
     if "industry_peers" in fin:
-        data["industry_peers"] = {"industry": industry, "peers": fin["industry_peers"]}
+        # 统一字段名：peer_model 使用 mv_bn(亿元)；fin 中为 total_mv(元)，此处换算
+        peers = []
+        for p in fin["industry_peers"]:
+            np_ = dict(p)
+            if "total_mv" in np_ and "mv_bn" not in np_:
+                np_["mv_bn"] = round(np_["total_mv"] / 1e8, 1)
+            peers.append(np_)
+        data["industry_peers"] = {"industry": industry, "peers": peers}
     if "top10_holders" in fin:
         t10_end = fin.get("top10_end_date", "")
         data["top10_holders"] = {
@@ -157,7 +187,6 @@ def build_stock(code, fin):
         }
 
     # P0-1：多维交叉验证——读取 TDX wenda 检索结果组装 web_research
-    research_file = os.path.join(PROJECT_DIR, "tdx_raw", f"{code}_research.json")
     if os.path.exists(research_file):
         with open(research_file, encoding="utf-8") as f:
             res = json.load(f)

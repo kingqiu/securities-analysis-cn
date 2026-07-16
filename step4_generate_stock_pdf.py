@@ -128,6 +128,14 @@ def _load(json_file):
     if "realtime_quote" in raw and isinstance(raw["realtime_quote"], dict):
         d["realtime_quote"] = raw["realtime_quote"]
 
+    # 公司画像（总资产/净资产，用于赚钱机制拆解）
+    if "profile" in raw and raw["profile"].get("items"):
+        d["profile"] = pd.DataFrame(raw["profile"]["items"], columns=raw["profile"]["fields"])
+
+    # 数据来源清单（P1-11）
+    if "data_sources" in raw and raw["data_sources"]:
+        d["data_sources"] = raw["data_sources"]
+
     if "free_market_data" in raw:
         d["free_market_data"] = raw["free_market_data"]
 
@@ -371,6 +379,194 @@ def _monitor_checklist(fin, val, cf_quality, stock_name):
         "falsify": falsify[:5],
         "milestones": milestones,
     }
+
+
+def _business_engine(income_df, fina_df, profile, stock_name):
+    """P1-8 赚钱机制/商业模式拆解：用毛利率、净利率、资产周转识别盈利模式与赚钱驱动。
+    毛利率/净利率/周转为可验证事实；盈利模式归类为规则化判断。"""
+    result = {}
+    if income_df is None or income_df.empty or profile is None:
+        return result
+    inc = income_df.copy()
+    inc["end_date"] = inc["end_date"].astype(str)
+    inc = inc[inc["end_date"].str.endswith("1231")].sort_values("end_date")
+    for col in ("total_revenue", "oper_cost", "n_income_attr_p"):
+        if col in inc.columns:
+            inc[col] = pd.to_numeric(inc.get(col, np.nan), errors="coerce")
+    if inc.empty:
+        return result
+    latest = inc.iloc[-1]
+    rev = latest.get("total_revenue")
+    cost = latest.get("oper_cost")
+    net = latest.get("n_income_attr_p")
+    if rev and rev > 0:
+        gross = (rev - cost) / rev if (cost is not None and pd.notna(cost)) else None
+        net_m = net / rev if (net is not None and pd.notna(net)) else None
+        result["revenue_bn"] = round(rev / 1e8, 1)
+        result["gross_margin"] = round(gross * 100, 1) if gross is not None else None
+        result["net_margin"] = round(net_m * 100, 1) if net_m is not None else None
+    # 资产效率（事实）
+    try:
+        prof = profile.iloc[0]
+        ta = float(prof.get("total_assets")) if prof.get("total_assets") is not None else None
+        na = float(prof.get("net_assets")) if prof.get("net_assets") is not None else None
+    except (AttributeError, KeyError, TypeError, ValueError):
+        ta = na = None
+    if ta and ta > 0 and rev:
+        result["asset_turnover"] = round(rev / ta, 3)
+    if na and na > 0 and rev:
+        result["equity_turnover"] = round(rev / na, 3)
+    # 规则化归类（判断）
+    gm = result.get("gross_margin")
+    nm = result.get("net_margin")
+    if gm is not None and nm is not None:
+        if gm >= 60:
+            model = "高毛利模式：盈利核心来自产品溢价、品牌、专利或稀缺资源壁垒，对销量波动耐受度较高，但需警惕单品依赖与价格管控（如集采/招标）。"
+        elif gm >= 35:
+            model = "中等毛利模式：盈利来自规模制造与成本管控，竞争优势取决于产能效率、良率与供应链话语权。"
+        else:
+            model = "低毛利模式：盈利高度依赖销量与周转，价格或需求下行时利润弹性大、抗风险能力弱。"
+        if nm >= 15:
+            quality = "净利率处于较高水平，费用管控或产品附加值较好。"
+        elif nm >= 8:
+            quality = "净利率处于中等水平。"
+        else:
+            quality = "净利率偏低，需关注费用率与成本端的挤压。"
+        if gm >= 50:
+            driver = "高毛利驱动：盈利核心靠‘卖得贵’（产品溢价/专利壁垒/品牌），风险在价格管控与单品依赖。"
+        elif gm >= 35:
+            driver = "中等毛利驱动：盈利靠‘做得精’（制造效率与规模），风险在产能利用率与成本波动。"
+        else:
+            driver = "低毛利驱动：盈利靠‘走量’（高周转），风险在价格与需求波动。"
+        result["model"] = model
+        result["quality"] = quality
+        result["driver"] = driver
+    return result
+
+
+def _industry_cycle(industry_comp, industry_peers, val, fin, stock_name, industry):
+    """P1-7 行业周期与格局判断：基于同业截面估值与增长信号的轻量规则化推断。
+    缺行业历史PE序列与产能/Capex数据，仅为方向性参考（判断）。"""
+    result = {}
+    if not industry_comp:
+        return result
+    peer_med_pe = industry_comp.get("industry_pe_median")
+    target_pe_pct = industry_comp.get("pe_percentile")
+    target_pe = val.get("pe_ttm")
+    rev_g = fin.get("rev_growth")
+    profit_g = fin.get("profit_growth")
+    if peer_med_pe:
+        if peer_med_pe < 20:
+            result["heat"] = "估值整体偏低（行业PE中位数<20）"
+        elif peer_med_pe > 40:
+            result["heat"] = "估值整体偏高（行业PE中位数>40）"
+        else:
+            result["heat"] = "估值处于中性区间（行业PE中位数20-40）"
+        result["peer_med_pe"] = peer_med_pe
+    if target_pe_pct is not None:
+        if target_pe_pct < 30:
+            result["position"] = "目标公司估值处于行业低位（<30%分位），相对同业折价"
+        elif target_pe_pct > 70:
+            result["position"] = "目标公司估值处于行业高位（>70%分位），相对同业溢价"
+        else:
+            result["position"] = "目标公司估值接近行业中枢"
+        result["target_pe_pct"] = target_pe_pct
+    if rev_g is not None and profit_g is not None:
+        if rev_g > 15 and profit_g > 15:
+            result["growth_signal"] = "公司增长强劲（营收/净利增速>15%）"
+        elif rev_g > 0 and profit_g > 0:
+            result["growth_signal"] = "公司稳健增长（营收/净利正增长）"
+        elif rev_g <= 0 or profit_g <= 0:
+            result["growth_signal"] = "公司增长承压（营收或净利增速转弱）"
+    # 周期阶段推断（判断）
+    heat_hi = (peer_med_pe or 0) > 40
+    heat_lo = (peer_med_pe or 99) < 20
+    pos_hi = (target_pe_pct or 0) > 70
+    pos_lo = (target_pe_pct or 99) < 30
+    strong = (rev_g or 0) > 15 and (profit_g or 0) > 15
+    weak = (rev_g or 0) <= 0 or (profit_g or 0) <= 0
+    if heat_hi and strong:
+        stage = "扩张期：行业估值偏热且龙头增长强劲，需防预期透支。"
+    elif heat_lo and weak:
+        stage = "出清/低谷期：行业估值低位且增长承压，关注格局改善与拐点信号。"
+    elif pos_lo and (rev_g or 0) > 0:
+        stage = "价值修复期：目标相对同业折价且仍增长，关注折价是否被错误定价。"
+    elif pos_hi:
+        stage = "高预期期：目标相对同业溢价，需更强基本面支撑。"
+    else:
+        stage = "成熟期/分化期：行业估值中性，个股表现取决于自身α与结构差异。"
+    result["stage"] = stage
+    return result
+
+
+def _bear_case(val, fin, cf_quality, stock_summary, moneyflow_df, reverse_dcf, web_research, industry):
+    """P1-6 空方逻辑与黑天鹅推演：规则化识别量化看空信号 + 检索偏空关键词 + 行业化黑天鹅场景。"""
+    bear = []
+    facts = []
+    pe_pct = val.get("pe_percentile")
+    pe_pct_3y = val.get("pe_pct_3y")
+    debt = fin.get("debt_ratio")
+    rev_g = fin.get("rev_growth")
+    profit_g = fin.get("profit_growth")
+    cfo = cf_quality.get("latest_ratio") if cf_quality else None
+    net_mf = stock_summary.get("net_mf_20d")
+    pledge = stock_summary.get("pledge_ratio")
+    impl = reverse_dcf.get("implied_growth") if reverse_dcf else None
+    hist = reverse_dcf.get("hist_cagr") if reverse_dcf else None
+
+    # 量化看空信号
+    if (pe_pct is not None and pe_pct > 70) or (pe_pct_3y is not None and pe_pct_3y > 80):
+        bear.append("估值分位偏高（PE历史分位>70% / 近3年>80%），安全边际不足，回撤风险大。")
+    if debt is not None and debt > 60:
+        bear.append(f"资产负债率偏高（{debt}%），财务杠杆与利息负担压制抗风险能力。")
+    if cfo is not None and cfo < 0.8:
+        bear.append(f"经营现金流/净利仅 {cfo}，利润含金量偏低，盈利质量需复核。")
+    if isinstance(net_mf, (int, float)) and net_mf < 0:
+        bear.append("近20日主力资金净流出，短期筹码面偏弱。")
+    if isinstance(pledge, (int, float)) and pledge > 10:
+        bear.append(f"股权质押率 {pledge}%，存在股价下跌触发平仓的连锁风险。")
+    if (rev_g is not None and rev_g < 0) or (profit_g is not None and profit_g < 0):
+        bear.append("营收或净利已现负增长，成长逻辑面临证伪。")
+    if impl not in (None, "N/A") and hist not in (None, "N/A"):
+        try:
+            if float(impl) > float(hist) * 1.5 and float(impl) > 0.2:
+                bear.append(f"反向DCF显示市场隐含增速 {impl}% 远高于历史CAGR {hist}%，预期透支明显。")
+        except (TypeError, ValueError):
+            pass
+
+    # 检索偏空关键词
+    if web_research and web_research.get("sections"):
+        text = " ".join(str(v) for v in web_research["sections"].values())
+        keywords = ["减持", "下滑", "亏损", "诉讼", "监管", "问询", "终止", "承压", "降价", "集采", "风险", "回调", "利空", "警示", "暂停"]
+        hits = [k for k in keywords if k in text]
+        if hits:
+            facts.append("互联网检索中出现的偏空关键词：" + "、".join(hits)
+                         + "（详见「十四、公司研究与行业动态」原文，需结合公告核实）。")
+
+    if not bear:
+        bear = ["未检出显著量化空方信号；但任何公司均存在宏观、行业与政策层面的系统性风险，仍需持续跟踪。"]
+
+    # 行业化黑天鹅场景
+    swan_map = {
+        "医药": ["集采/招标降价导致核心品种价格与利润大幅下滑",
+                 "重磅在研管线临床失败或进度不及预期",
+                 "医保控费与专利悬崖冲击存量品种"],
+        "医药制造": ["集采/招标降价导致核心品种价格与利润大幅下滑",
+                     "重磅在研管线临床失败或进度不及预期",
+                     "医保控费与专利悬崖冲击存量品种"],
+        "玻璃纤维": ["行业产能过剩下价格战，玻纤价格持续下行",
+                     "下游风电/汽车/电子需求走弱",
+                     "贸易摩擦与海外关税壁垒"],
+        "半导体": ["行业下行周期叠加库存减值",
+                   "大客户订单流失或技术路线切换",
+                   "设备/材料出口管制升级"],
+        "default": ["行业政策与监管骤变",
+                    "技术路线被颠覆，核心产品被替代",
+                    "大客户/大供应商集中带来的经营中断",
+                    "宏观系统性风险与流动性收紧"],
+    }
+    swans = swan_map.get(industry, swan_map["default"])
+    return {"bear": bear, "facts": facts, "swans": swans}
 
 
 def _balance_sheet_quality(balancesheet_df, fina_df):
@@ -870,6 +1066,12 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     analyst_view = build_stock_research_view(stock_summary)
     analyst_brief = render_stock_research_brief(analyst_view)
 
+    # P1 增强：赚钱机制 / 行业周期 / 空方逻辑（均为规则化，零 token）
+    business_engine = _business_engine(income_df, fina_df, d.get("profile"), stock_name)
+    industry_cycle = _industry_cycle(industry_comp, d.get("industry_peers"), val, fin, stock_name, industry)
+    bear_case = _bear_case(val, fin, cf_quality, stock_summary, moneyflow_df, reverse_dcf, web_research, industry)
+    data_sources = d.get("data_sources", [])
+
     doc = SimpleDocTemplate(
         output_path, pagesize=A4,
         leftMargin=2*cm, rightMargin=2*cm,
@@ -894,13 +1096,20 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
             ["PE(TTM)", str(val.get("pe_ttm", "N/A")), f"历史分位 {val.get('pe_percentile', 'N/A')}%"],
         ],
         notes=[
-            ["核心结论", f"当前PE(TTM){val.get('pe_ttm','N/A')}、历史分位{val.get('pe_percentile','N/A')}%，ROE{fin.get('roe','N/A')}%；估值不高但增长与现金流仍需验证。"],
-            ["关注变量", "估值分位、业绩增长、现金流质量、资金技术和行业景气度共同影响研究判断。"],
-            ["主要风险", "消费需求、行业竞争、政策变化、估值中枢下移及市场系统性波动。"],
+            ["核心结论", f"【判断】当前PE(TTM){val.get('pe_ttm','N/A')}、历史分位{val.get('pe_percentile','N/A')}%，ROE{fin.get('roe','N/A')}%；估值不高但增长与现金流仍需验证。"],
+            ["关注变量", "【判断】估值分位、业绩增长、现金流质量、资金技术和行业景气度共同影响研究判断。"],
+            ["主要风险", "【判断】消费需求、行业竞争、政策变化、估值中枢下移及市场系统性波动。"],
         ],
     )
 
     add_report_reading_guide(story, kind="stock")
+
+    # P1-10：事实/判断标注约定
+    story.append(Paragraph(
+        "标注约定：本报告以【事实】标注可验证的公开数据，【判断】标注基于规则的分析推论，"
+        "【情景】标注假设性风险场景。所有结论仅供研究复盘，不构成任何投资建议。",
+        st["caption"]
+    ))
 
     # ── 一、公司概况 ──
     story.append(Paragraph("一、公司概况", st["h1"]))
@@ -1132,7 +1341,9 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
             story.append(Spacer(1, 0.2*cm))
 
             target = peer_view.get("target", {})
-            peer_rows = [["角色", "名称", "市值(亿)", "PE", "PB", "ROE", "毛利率", "净利增速"]]
+            # P1-9：同行深度对比表（目标行补全净利率/营收增速；peer 行在有数据时自动显示）
+            _tgt_nm = business_engine.get("net_margin") if business_engine else None
+            peer_rows = [["角色", "名称", "市值(亿)", "PE", "PB", "ROE", "毛利率", "净利率", "营收增速", "净利增速"]]
             peer_rows.append([
                 target.get("role", "目标公司"),
                 target.get("name", stock_name),
@@ -1141,6 +1352,8 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
                 f"{target.get('pb'):.1f}" if target.get("pb") is not None else "N/A",
                 f"{target.get('roe'):.1f}%" if target.get("roe") is not None else "N/A",
                 f"{target.get('gross_margin'):.1f}%" if target.get("gross_margin") is not None else "N/A",
+                f"{_tgt_nm:.1f}%" if _tgt_nm is not None else "N/A",
+                f"{target.get('rev_growth'):.1f}%" if target.get("rev_growth") is not None else "N/A",
                 f"{target.get('profit_growth'):.1f}%" if target.get("profit_growth") is not None else "N/A",
             ])
             for p in peer_view.get("peer_rows", [])[:6]:
@@ -1152,13 +1365,34 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
                     f"{p.get('pb'):.1f}" if p.get("pb") is not None else "N/A",
                     f"{p.get('roe'):.1f}%" if p.get("roe") is not None else "N/A",
                     f"{p.get('gross_margin'):.1f}%" if p.get("gross_margin") is not None else "N/A",
+                    f"{p.get('net_margin'):.1f}%" if p.get("net_margin") is not None else "N/A",
+                    f"{p.get('rev_growth'):.1f}%" if p.get("rev_growth") is not None else "N/A",
                     f"{p.get('profit_growth'):.1f}%" if p.get("profit_growth") is not None else "N/A",
                 ])
-            story.append(_tbl(peer_rows, col_widths=[2.5*cm, 3*cm, 2*cm, 1.6*cm, 1.6*cm, 1.8*cm, 1.8*cm, 2*cm]))
+            story.append(_tbl(peer_rows, col_widths=[1.9*cm, 2.5*cm, 1.6*cm, 1.25*cm, 1.25*cm, 1.45*cm, 1.45*cm, 1.45*cm, 1.65*cm, 1.65*cm]))
             story.append(Paragraph(
-                "说明：龙头参照用于判断行业定价锚和质量上限；若目标公司估值显著低于龙头，需要进一步判断是低估机会，还是商业模式、成长性、治理或现金流折价。",
+                "说明：龙头参照用于判断行业定价锚和质量上限；若目标公司估值显著低于龙头，需要进一步判断是低估机会，"
+                "还是商业模式、成长性、治理或现金流折价。同行 ROE/毛利率/净利率/增速在其财务数据接入后自动填充（当前同行仅含估值与市值）。",
                 st["caption"]
             ))
+            # 同行定位结论（规则化判断）
+            _pos_parts = []
+            _pe_pct = peer_view.get("percentile", {}).get("pe_ttm")
+            _roe_pct = peer_view.get("percentile", {}).get("roe")
+            if _pe_pct is not None:
+                _pos_parts.append(f"PE 处于同行 {_pe_pct}% 分位")
+            if _roe_pct is not None:
+                _pos_parts.append(f"ROE 处于同行 {_roe_pct}% 分位")
+            _med = peer_view.get("industry_median", {})
+            if _med.get("pe_ttm") is not None and target.get("pe_ttm") is not None:
+                _rel = "低于" if target["pe_ttm"] < _med["pe_ttm"] else ("高于" if target["pe_ttm"] > _med["pe_ttm"] else "接近")
+                _pos_parts.append(f"PE {_rel}行业中位数 {_med['pe_ttm']:.1f}")
+            if _pos_parts:
+                story.append(Paragraph(
+                    f"【判断】同行定位：{'；'.join(_pos_parts)}。"
+                    f"若估值折价伴随更优的 ROE/增速，则折价可能为机会；若折价源于成长性或治理劣势，则属合理风险补偿。",
+                    st["body"]
+                ))
             story.append(Spacer(1, 0.3*cm))
 
     # ── 七、三情景分析 ──
@@ -1438,7 +1672,7 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
         ]
         story.append(_tbl(rdc_rows, col_widths=[5*cm, 11*cm]))
         story.append(Spacer(1, 0.2*cm))
-        story.append(Paragraph(f"判断：{reverse_dcf.get('verdict','N/A')}", st["body"]))
+        story.append(Paragraph(f"【判断】{reverse_dcf.get('verdict','N/A')}", st["body"]))
         story.append(Paragraph(
             "注：隐含增速为简化反向 DCF 推算结果，受折现率/永续增长率假设影响，仅作参考。",
             st["caption"]
@@ -1456,15 +1690,122 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
         story.append(Spacer(1, 0.2*cm))
         story.append(Paragraph("强化逻辑的事件", st["h2"]))
         for item in monitor.get("strengthen", []):
-            story.append(Paragraph(f"• {item}", st["body"]))
+            story.append(Paragraph(f"• 【验证·强化】{item}", st["body"]))
         story.append(Spacer(1, 0.2*cm))
         story.append(Paragraph("证伪逻辑的数据", st["h2"]))
         for item in monitor.get("falsify", []):
-            story.append(Paragraph(f"• {item}", st["body"]))
+            story.append(Paragraph(f"• 【验证·证伪】{item}", st["body"]))
         story.append(Spacer(1, 0.2*cm))
         story.append(Paragraph("关键时间节点", st["h2"]))
         for item in monitor.get("milestones", []):
             story.append(Paragraph(f"• {item}", st["body"]))
+        story.append(Spacer(1, 0.3*cm))
+
+    # ── 十九、赚钱机制与商业模式拆解（P1-8）──
+    if business_engine:
+        story.append(PageBreak())
+        story.append(Paragraph("十九、赚钱机制与商业模式拆解", st["h1"]))
+        story.append(Paragraph(
+            "本节从毛利率、净利率与资产周转拆解公司“靠什么赚钱”，区分产品溢价型与规模效率型。",
+            st["caption"]
+        ))
+        story.append(Spacer(1, 0.2*cm))
+        be_rows = [["维度", "数值/判断"]]
+        be_rows.append(["年营业收入", f"{business_engine.get('revenue_bn','N/A')} 亿元 【事实】"])
+        be_rows.append(["毛利率", f"{business_engine.get('gross_margin','N/A')}% 【事实】"])
+        be_rows.append(["净利率", f"{business_engine.get('net_margin','N/A')}% 【事实】"])
+        if business_engine.get("asset_turnover") is not None:
+            be_rows.append(["总资产周转率", f"{business_engine.get('asset_turnover')} 【事实】"])
+        if business_engine.get("equity_turnover") is not None:
+            be_rows.append(["每元净资产创收", f"{business_engine.get('equity_turnover')} 元 【事实】"])
+        story.append(_tbl(be_rows, col_widths=[4*cm, 12*cm]))
+        story.append(Spacer(1, 0.2*cm))
+        if business_engine.get("model"):
+            story.append(Paragraph(f"【判断】盈利模式：{business_engine.get('model')}", st["body"]))
+        if business_engine.get("quality"):
+            story.append(Paragraph(f"【判断】盈利质量：{business_engine.get('quality')}", st["body"]))
+        if business_engine.get("driver"):
+            story.append(Paragraph(f"【判断】赚钱驱动：{business_engine.get('driver')}", st["body"]))
+        story.append(Paragraph(
+            "注：毛利率/净利率/周转率为可验证财务事实；盈利模式归类为基于上述数据的规则化判断。",
+            st["caption"]
+        ))
+        story.append(Spacer(1, 0.3*cm))
+
+    # ── 二十、行业周期与格局判断（P1-7）──
+    if industry_cycle:
+        story.append(PageBreak())
+        story.append(Paragraph("二十、行业周期与格局判断", st["h1"]))
+        story.append(Paragraph(
+            "基于同业截面估值与增长信号的轻量代理判断（缺行业历史PE序列与产能/Capex数据，仅为方向性参考）。",
+            st["caption"]
+        ))
+        story.append(Spacer(1, 0.2*cm))
+        ic2_rows = [["信号", "判断"]]
+        if industry_cycle.get("heat"):
+            ic2_rows.append(["行业估值热度", f"{industry_cycle.get('heat')} 【判断】"])
+        if industry_cycle.get("position"):
+            ic2_rows.append(["目标相对行业位置", f"{industry_cycle.get('position')} 【判断】"])
+        if industry_cycle.get("growth_signal"):
+            ic2_rows.append(["公司增长信号", f"{industry_cycle.get('growth_signal')} 【事实·判断混合】"])
+        story.append(_tbl(ic2_rows, col_widths=[4*cm, 12*cm]))
+        story.append(Spacer(1, 0.2*cm))
+        if industry_cycle.get("stage"):
+            story.append(Paragraph(f"【判断】周期阶段：{industry_cycle.get('stage')}", st["body"]))
+        story.append(Paragraph(
+            "说明：本判断使用同业PE中位数、目标在行业中的PE分位与增长数据做规则化推断，"
+            "未接入行业产能/资本开支/库存等深层数据，结论仅供参考。",
+            st["caption"]
+        ))
+        story.append(Spacer(1, 0.3*cm))
+
+    # ── 二十一、空方逻辑与风险推演（P1-6）──
+    if bear_case:
+        story.append(PageBreak())
+        story.append(Paragraph("二十一、空方逻辑与风险推演", st["h1"]))
+        story.append(Paragraph(
+            "对抗确认偏误：强制列出看空理由与黑天鹅场景。以下量化信号为规则化识别，"
+            "偏空检索线索来自互联网研究（需以公告核实）。",
+            st["caption"]
+        ))
+        story.append(Spacer(1, 0.2*cm))
+        story.append(Paragraph("看空理由（量化信号）", st["h2"]))
+        for b in bear_case.get("bear", []):
+            story.append(Paragraph(f"• 【判断】{b}", st["body"]))
+        if bear_case.get("facts"):
+            story.append(Spacer(1, 0.2*cm))
+            story.append(Paragraph("偏空检索线索", st["h2"]))
+            for f in bear_case.get("facts", []):
+                story.append(Paragraph(f"• {f}", st["body"]))
+        story.append(Spacer(1, 0.2*cm))
+        story.append(Paragraph("黑天鹅场景（需重点防范）", st["h2"]))
+        for s in bear_case.get("swans", []):
+            story.append(Paragraph(f"• 【情景】{s}", st["body"]))
+        story.append(Paragraph(
+            "注：黑天鹅为基于行业特征的情景假设，不代表预测；用于提示需持续跟踪的脆弱点。",
+            st["caption"]
+        ))
+        story.append(Spacer(1, 0.3*cm))
+
+    # ── 二十二、数据来源与取数说明（P1-11）──
+    if data_sources:
+        story.append(PageBreak())
+        story.append(Paragraph("二十二、数据来源与取数说明", st["h1"]))
+        story.append(Paragraph(
+            "本报告为纯规则化、零 token 编排：所有指标由公开数据计算，未调用任何大模型。来源如下：",
+            st["caption"]
+        ))
+        story.append(Spacer(1, 0.2*cm))
+        src_rows = [["数据项", "来源/方法", "取数时间"]]
+        for s in data_sources:
+            src_rows.append([s.get("item", "N/A"), s.get("source", "N/A"), s.get("time", "N/A")])
+        story.append(_tbl(src_rows, col_widths=[4*cm, 9*cm, 3*cm]))
+        story.append(Spacer(1, 0.2*cm))
+        story.append(Paragraph(
+            "说明：财务数据以 TDX（通达信）F10 接口采集，行情以 AkShare 新浪源补充；"
+            "所有计算在本地完成，不具备实时性，请以交易所与上市公司最新公告为准。",
+            st["caption"]
+        ))
         story.append(Spacer(1, 0.3*cm))
 
     # ── 风险提示 ──
