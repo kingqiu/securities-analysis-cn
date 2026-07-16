@@ -121,6 +121,10 @@ def _load(json_file):
     if "web_research" in raw:
         d["web_research"] = raw["web_research"]
 
+    # 杜邦分解（由 run_report 计算后写入）
+    if "dupont" in raw and isinstance(raw["dupont"], dict):
+        d["dupont"] = raw["dupont"]
+
     if "realtime_quote" in raw and isinstance(raw["realtime_quote"], dict):
         d["realtime_quote"] = raw["realtime_quote"]
 
@@ -149,11 +153,19 @@ def _latest_valuation(daily_basic_df):
     latest = df.iloc[-1]
     pe_series = df["pe_ttm"].dropna()
     pe_pct = round((pe_series < latest["pe_ttm"]).mean() * 100, 1) if len(pe_series) > 10 else None
+    # P0-4：分档分位——近1年(250交易日)、近3年(750交易日)
+    cur_pe = latest["pe_ttm"]
+    pe_1y = df["pe_ttm"].tail(250).dropna()
+    pe_pct_1y = round((pe_1y < cur_pe).mean() * 100, 1) if len(pe_1y) > 10 else None
+    pe_3y = df["pe_ttm"].tail(750).dropna()
+    pe_pct_3y = round((pe_3y < cur_pe).mean() * 100, 1) if len(pe_3y) > 10 else None
     return {
         "pe_ttm": round(latest["pe_ttm"], 2) if pd.notna(latest["pe_ttm"]) else None,
         "pb":     round(latest["pb"], 2)     if pd.notna(latest["pb"])     else None,
-        "mv_bn":  round(latest["total_mv"] / 1e4, 1) if pd.notna(latest.get("total_mv")) else None,
+        "mv_bn":  round(latest["total_mv"] / 1e8, 1) if pd.notna(latest.get("total_mv")) else None,
         "pe_percentile": pe_pct,
+        "pe_pct_1y": pe_pct_1y,
+        "pe_pct_3y": pe_pct_3y,
     }
 
 
@@ -239,6 +251,126 @@ def _cashflow_quality(cashflow_df, income_df):
         else "偏弱（利润质量存疑）"
     )
     return result
+
+
+def _reverse_dcf(val, income_df, years=5, r=0.09, g=0.03):
+    """反向 DCF：反推当前市值隐含的未来净利增速，判断透支程度。
+    val: _latest_valuation 结果（含 mv_bn 市值亿元）
+    income_df: 含 end_date/total_revenue/n_income_attr_p
+    返回 dict: implied_growth, hist_cagr, verdict, assumptions
+    """
+    mv_bn = val.get("mv_bn")  # 市值（亿元）
+    if not mv_bn or income_df is None or income_df.empty:
+        return {}
+    df = income_df.copy()
+    df["end_date"] = df["end_date"].astype(str)
+    df = df[df["end_date"].str.endswith("1231")].sort_values("end_date")
+    df["n_income_attr_p"] = pd.to_numeric(df["n_income_attr_p"], errors="coerce")
+    df = df.dropna(subset=["n_income_attr_p"])
+    if len(df) < 2:
+        return {}
+    np0 = float(df["n_income_attr_p"].iloc[-1])      # 最新年报归母净利（元）
+    np0_bn = np0 / 1e8                                # 亿元
+    if np0_bn <= 0:
+        return {}
+    # 历史 CAGR（最多取近5期）
+    n_hist = min(len(df), 5)
+    np_hist = float(df["n_income_attr_p"].iloc[-n_hist])
+    if np_hist and np_hist > 0 and n_hist > 1:
+        hist_cagr = (np0 / np_hist) ** (1.0 / (n_hist - 1)) - 1
+    else:
+        hist_cagr = None
+    # 反推隐含增速 x：市值 = np0_bn * Σ(1+x)^t/(1+r)^t + 终值
+    def pv(x):
+        s = 0.0
+        for t in range(1, years + 1):
+            s += (1 + x) ** t / (1 + r) ** t
+        terminal = (1 + x) ** years * (1 + g) / (r - g) / (1 + r) ** years
+        s += terminal
+        return np0_bn * s
+    lo, hi = -0.10, 0.50
+    # 二分法求 x 使 pv(x) ≈ mv_bn
+    if pv(lo) > mv_bn or pv(hi) < mv_bn:
+        implied = None
+    else:
+        for _ in range(80):
+            mid = (lo + hi) / 2
+            if pv(mid) < mv_bn:
+                lo = mid
+            else:
+                hi = mid
+        implied = (lo + hi) / 2
+    # 判断
+    if implied is None:
+        verdict = "当前市值超出合理增速区间，可能存在显著透支或数据异常。"
+    elif hist_cagr is not None:
+        if implied > hist_cagr * 1.5 and implied > 0.20:
+            verdict = "隐含预期显著高于历史增速，市场定价偏乐观，需警惕预期落空。"
+        elif implied > hist_cagr:
+            verdict = "隐含预期略高于历史增速，定价偏积极但尚在可解释区间。"
+        elif implied > 0:
+            verdict = "隐含预期低于或接近历史增速，定价相对克制。"
+        else:
+            verdict = "隐含预期为负或接近零，市场定价偏悲观。"
+    else:
+        verdict = "历史数据不足以计算 CAGR，仅给出隐含增速。"
+    return {
+        "implied_growth": round(implied * 100, 1) if implied is not None else "N/A",
+        "hist_cagr": round(hist_cagr * 100, 1) if hist_cagr is not None else "N/A",
+        "np0_bn": round(np0_bn, 2),
+        "mv_bn": round(mv_bn, 1),
+        "verdict": verdict,
+        "assumptions": f"折现率{r*100:.0f}%，永续增长率{g*100:.0f}%，显式预测{years}年",
+    }
+
+
+def _monitor_checklist(fin, val, cf_quality, stock_name):
+    """规则化生成未来验证节点监控清单：强化逻辑事件 + 证伪逻辑数据 + 关键节点。"""
+    strengthen, falsify = [], []
+    roe = fin.get("roe")
+    pe_pct = val.get("pe_percentile")
+    rev_g = fin.get("rev_growth")
+    profit_g = fin.get("profit_growth")
+    gross = fin.get("gross_margin")
+    cfo_ratio = cf_quality.get("latest_ratio")
+
+    # 强化逻辑事件
+    if rev_g is not None:
+        strengthen.append(f"下期营收增速维持在 {round(rev_g*0.8,1)}% 以上，成长逻辑延续。")
+    if roe is not None:
+        strengthen.append(f"ROE 维持在 {roe}% 以上，盈利能力未恶化。")
+    if cfo_ratio is not None and cfo_ratio >= 1.0:
+        strengthen.append("经营现金流/净利持续 ≥ 1.0，利润含金量验证。")
+    if pe_pct is not None and pe_pct < 30:
+        strengthen.append("估值分位回落至 30% 以下，安全边际改善。")
+
+    # 证伪逻辑数据
+    if roe is not None:
+        falsify.append(f"ROE 跌破 {round(roe*0.7,1)}%，盈利能力实质性下滑。")
+    if cfo_ratio is not None:
+        falsify.append(f"经营现金流/净利持续低于 {round(cfo_ratio*0.6,2)}，利润质量恶化。")
+    if rev_g is not None and rev_g > 0:
+        falsify.append(f"营收增速转负或连续两季低于 {round(rev_g*0.5,1)}%，成长证伪。")
+    if profit_g is not None:
+        falsify.append(f"归母净利连续两季负增长，业绩拐点向下。")
+    if pe_pct is not None and pe_pct > 70:
+        falsify.append("估值分位升至 80% 以上，透支过度。")
+
+    # 关键节点
+    milestones = [
+        "下一份定期报告（季报/半年报/年报）披露日：验证营收与利润趋势。",
+        "下一次业绩预告/快报窗口：确认业绩是否延续或拐头。",
+        "行业重大政策/事件窗口：跟踪供需与竞争格局变化。",
+    ]
+    if not strengthen:
+        strengthen = ["业绩与估值指标出现正向改善信号时强化逻辑。"]
+    if not falsify:
+        falsify = ["核心财务指标出现持续恶化时复核逻辑。"]
+    return {
+        "strengthen": strengthen[:5],
+        "falsify": falsify[:5],
+        "milestones": milestones,
+    }
 
 
 def _balance_sheet_quality(balancesheet_df, fina_df):
@@ -627,6 +759,11 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
         "profit_growth": fin.get("profit_growth"),
     }, d.get("industry_peers"))
 
+    # P0 增强：反向DCF / 监控清单 / 杜邦（杜邦数据由 run_report 提供）
+    reverse_dcf = _reverse_dcf(val, income_df)
+    monitor = _monitor_checklist(fin, val, cf_quality, stock_name)
+    dupont = d.get("dupont")
+
     # 计算增强指标
     # 主力资金净流入(近20日合计)
     net_mf_20d = "N/A"
@@ -732,7 +869,6 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     }
     analyst_view = build_stock_research_view(stock_summary)
     analyst_brief = render_stock_research_brief(analyst_view)
-    advice_text = get_investment_advice("stock", stock_summary)
 
     doc = SimpleDocTemplate(
         output_path, pagesize=A4,
@@ -774,6 +910,7 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
         ["上市日期", basic.get("list_date",""), "市场", basic.get("market","")],
         ["总市值", f"{val.get('mv_bn','N/A')}亿元", "当前PE(TTM)", str(val.get("pe_ttm","N/A"))],
         ["当前PB", str(val.get("pb","N/A")), "PE历史分位", f"{val.get('pe_percentile','N/A')}%"],
+        ["PE近1年分位", f"{val.get('pe_pct_1y','N/A')}%", "PE近3年分位", f"{val.get('pe_pct_3y','N/A')}%"],
         ["当前股价", f"{stock_summary.get('cur_price', 'N/A')}元", "价格来源", stock_summary.get("price_source", "Tushare日线/估值")],
     ]
     story.append(_tbl(info_rows, col_widths=[3.5*cm, 5.5*cm, 3.5*cm, 5.5*cm]))
@@ -870,10 +1007,6 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
         story.append(Spacer(1, 0.2*cm))
 
     story.extend(md_to_story(analyst_brief, st["body"], table_builder=_tbl))
-    story.append(Spacer(1, 0.2*cm))
-    story.append(Paragraph("模型文字解读", st["h2"]))
-    story.append(Spacer(1, 0.2*cm))
-    story.extend(md_to_story(advice_text, st["body"], table_builder=_tbl))
     story.append(Spacer(1, 0.3*cm))
 
     # ── 三、股价与估值 ──
@@ -929,6 +1062,20 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
                 str(r["ratio"]) if r["ratio"] is not None else "N/A",
             ])
         story.append(_tbl(cf_rows, col_widths=[2.5*cm, 4*cm, 4*cm, 3.5*cm]))
+        story.append(Spacer(1, 0.3*cm))
+
+    # ── 5.6 ROE 杜邦分解（P0-3）──
+    if dupont and dupont.get("rows"):
+        story.append(Paragraph("5.6 ROE 杜邦分解", st["h2"]))
+        story.append(Paragraph(
+            f"ROE = 净利率 × 总资产周转率 × 权益乘数。驱动判断：{dupont.get('driver','N/A')}。"
+            f"靠净利率的 ROE 含金量高，靠权益乘数（加杠杆）的 ROE 风险在累积。",
+            st["body"]
+        ))
+        dp_rows = [["年份", "净利率(%)", "总资产周转率", "权益乘数", "ROE(%)"]]
+        for r in dupont["rows"]:
+            dp_rows.append([str(x) for x in r])
+        story.append(_tbl(dp_rows, col_widths=[2.5*cm, 3*cm, 3.5*cm, 3*cm, 2.5*cm]))
         story.append(Spacer(1, 0.3*cm))
 
     # ── 五点八、资产负债质量 ──
@@ -1252,16 +1399,10 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     if not (web_research and web_research.get("sections")):
         story.append(Paragraph("十五、行业与公司动态", st["h1"]))
         story.append(Paragraph(
-            f"以下优先通过搜索服务获取{stock_name}所在行业近期动态；搜索不可用时才降级为AI整理，仅供参考。",
+            "本次未接入互联网检索（零 token 纯结构化模式），行业与公司动态暂缺。"
+            "如需该章节，提供对应股票代码的 TDX wenda 检索结果（tdx_raw/<code>_research.json）即可生成「十四、互联网研究（多维交叉验证）」。",
             st["caption"]
         ))
-        story.append(Spacer(1, 0.2*cm))
-        try:
-            _industry = basic.get("industry", "未知") if basic else "未知"
-            industry_news = get_industry_news(stock_name, d["ts_code"], _industry, "A股")
-            story.extend(md_to_story(industry_news, st["body"], table_builder=_tbl))
-        except Exception as e:
-            story.append(Paragraph(f"行业动态获取失败：{e}", st["body"]))
         story.append(Spacer(1, 0.3*cm))
 
     # ── 十六、审计与合规 ──
@@ -1276,6 +1417,54 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
                 str(row.get("audit_sign", ""))[:12],
             ])
         story.append(_tbl(aud_rows, col_widths=[2.5*cm, 4*cm, 4*cm, 4*cm]))
+        story.append(Spacer(1, 0.3*cm))
+
+    # ── 十七、隐含预期推演（反向 DCF，P0-2）──
+    if reverse_dcf:
+        story.append(PageBreak())
+        story.append(Paragraph("十七、隐含预期推演（反向 DCF）", st["h1"]))
+        story.append(Paragraph(
+            "本节不预测股价，而是反推：当前市值定价了多少未来增长？隐含预期越高于历史增速，定价越乐观。",
+            st["caption"]
+        ))
+        story.append(Spacer(1, 0.2*cm))
+        rdc_rows = [
+            ["指标", "数值"],
+            ["当前市值", f"{reverse_dcf.get('mv_bn','N/A')} 亿元"],
+            ["最新年报归母净利", f"{reverse_dcf.get('np0_bn','N/A')} 亿元"],
+            ["历史净利 CAGR", f"{reverse_dcf.get('hist_cagr','N/A')}%"],
+            ["市场隐含增速", f"{reverse_dcf.get('implied_growth','N/A')}%"],
+            ["核心假设", reverse_dcf.get("assumptions","N/A")],
+        ]
+        story.append(_tbl(rdc_rows, col_widths=[5*cm, 11*cm]))
+        story.append(Spacer(1, 0.2*cm))
+        story.append(Paragraph(f"判断：{reverse_dcf.get('verdict','N/A')}", st["body"]))
+        story.append(Paragraph(
+            "注：隐含增速为简化反向 DCF 推算结果，受折现率/永续增长率假设影响，仅作参考。",
+            st["caption"]
+        ))
+        story.append(Spacer(1, 0.3*cm))
+
+    # ── 十八、未来验证节点（监控清单，P0-5）──
+    if monitor:
+        story.append(PageBreak())
+        story.append(Paragraph("十八、未来验证节点（监控清单）", st["h1"]))
+        story.append(Paragraph(
+            "以下为规则化生成的跟踪框架：强化逻辑的事件与证伪逻辑的数据，用于持续验证研究结论。不构成买卖建议。",
+            st["caption"]
+        ))
+        story.append(Spacer(1, 0.2*cm))
+        story.append(Paragraph("强化逻辑的事件", st["h2"]))
+        for item in monitor.get("strengthen", []):
+            story.append(Paragraph(f"• {item}", st["body"]))
+        story.append(Spacer(1, 0.2*cm))
+        story.append(Paragraph("证伪逻辑的数据", st["h2"]))
+        for item in monitor.get("falsify", []):
+            story.append(Paragraph(f"• {item}", st["body"]))
+        story.append(Spacer(1, 0.2*cm))
+        story.append(Paragraph("关键时间节点", st["h2"]))
+        for item in monitor.get("milestones", []):
+            story.append(Paragraph(f"• {item}", st["body"]))
         story.append(Spacer(1, 0.3*cm))
 
     # ── 风险提示 ──

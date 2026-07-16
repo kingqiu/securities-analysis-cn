@@ -23,12 +23,13 @@ def _items(df: pd.DataFrame):
     return out
 
 
-def fetch_daily(code: str, days=130):
+def fetch_daily(code: str):
+    """A股日线全量（新浪源），由调用方按需 tail。"""
     sym = ("sh" if code.startswith(("5", "6", "9")) else "sz") + code
     df = ak.stock_zh_a_daily(symbol=sym, adjust="qfq")
     df = df.rename(columns={"date": "trade_date", "close": "close", "high": "high", "low": "low", "volume": "vol"})
     df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "")
-    df = df[["trade_date", "close", "high", "low", "vol"]].tail(days)
+    df = df[["trade_date", "close", "high", "low", "vol"]]
     for c in ("close", "high", "low", "vol"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df.reset_index(drop=True)
@@ -91,11 +92,14 @@ def build_stock(code, fin):
     ttm_np = fin.get("ttm_net_profit") or income[-1][2]
     ts_code = fin.get("ts_code", code + (".SH" if code.startswith(("5","6","9")) else ".SZ"))
 
-    daily = fetch_daily(code)
+    daily_full = fetch_daily(code)
+    daily = daily_full.tail(130).reset_index(drop=True)
     index = fetch_index()
-    print(f"  daily={len(daily)} index={len(index)} PE点将计算")
+    print(f"  daily={len(daily)} (full={len(daily_full)}) index={len(index)} PE点将计算")
 
-    db = daily[["trade_date", "close"]].copy()
+    # P0-4：daily_basic 取近3年(750交易日)用于多档分位
+    db_src = daily_full.tail(750).reset_index(drop=True)
+    db = db_src[["trade_date", "close"]].copy()
     db["pe_ttm"] = (db["close"] * shares / ttm_np).round(2)
     db["pb"] = (db["close"] * shares / net_assets).round(2)
     db["total_mv"] = (db["close"] * shares).round(0)
@@ -105,6 +109,22 @@ def build_stock(code, fin):
     ed, rev, net, cost = income[-1]
     fina_rows = [[ed, round(net/net_assets*100,2), round((rev-cost)/rev*100,2),
                   round((total_assets-net_assets)/total_assets*100,2)]]
+
+    # P0-3：杜邦分解（最新年报一期）
+    _nm = net / rev if rev else 0               # 净利率
+    _at = rev / total_assets if total_assets else 0  # 总资产周转率
+    _em = total_assets / net_assets if net_assets else 0  # 权益乘数
+    _roe_d = _nm * _at * _em
+    if _em >= _nm and _em >= _at:
+        _driver = "权益乘数（杠杆）驱动，ROE 含金量偏低，需警惕负债风险"
+    elif _nm >= _at and _nm >= _em:
+        _driver = "净利率驱动，ROE 含金量高，盈利能力强"
+    else:
+        _driver = "周转率驱动，运营效率较高"
+    dupont = {
+        "rows": [[ed[:4], round(_nm*100,2), round(_at,3), round(_em,3), round(_roe_d*100,2)]],
+        "driver": _driver,
+    }
 
     data = {
         "ts_code": ts_code, "fetch_time": datetime.now().isoformat(),
@@ -116,6 +136,7 @@ def build_stock(code, fin):
                    "items": [[r[0], r[1], r[2]] for r in income]},
         "fina_indicator": {"fields": ["end_date","roe","grossprofit_margin","debt_to_assets"], "items": fina_rows},
         "realtime_quote": {"price": price, "source": "tdx_quotes"},
+        "dupont": dupont,
     }
     if "cashflow_annual" in fin:
         data["cashflow"] = {"fields": ["end_date","n_cashflow_act"], "items": [list(r) for r in fin["cashflow_annual"]]}
@@ -134,6 +155,34 @@ def build_stock(code, fin):
             "fields": ["end_date","cash_div_tax","div_proc","stk_div","ann_date"],
             "items": [list(r) for r in fin["dividend_rows"]],
         }
+
+    # P0-1：多维交叉验证——读取 TDX wenda 检索结果组装 web_research
+    research_file = os.path.join(PROJECT_DIR, "tdx_raw", f"{code}_research.json")
+    if os.path.exists(research_file):
+        with open(research_file, encoding="utf-8") as f:
+            res = json.load(f)
+        sections = {}
+        reports = res.get("reports", [])
+        if reports:
+            sections["analyst_views"] = "\n".join(
+                f"- {r.get('title','')}（{r.get('date','')}）" for r in reports[:10])
+        news = res.get("news", []) + res.get("notices", [])
+        if news:
+            sections["recent_events"] = "\n".join(
+                f"- {n.get('title','')}（{n.get('date','')}）" for n in news[:12])
+        macro = res.get("macro", [])
+        if macro:
+            sections["industry_dynamics"] = "\n".join(
+                f"- {m.get('title','')}" for m in macro[:8])
+        if sections:
+            data["web_research"] = {
+                "source": "通达信 wenda 检索",
+                "sources": [r.get("title", "") for r in reports[:5]],
+                "fallback_used": False,
+                "structured_without_llm": True,
+                "sections": sections,
+            }
+            print(f"  web_research: {len(sections)} 个章节（研报{len(reports)}/新闻公告{len(news)}/宏观{len(macro)}）")
 
     out_json = os.path.join(PROJECT_DIR, f"temp_{code}_data.json")
     with open(out_json, "w", encoding="utf-8") as f:
