@@ -11,7 +11,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import KeepTogether, PageBreak, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import Flowable, KeepTogether, PageBreak, Paragraph, Spacer, Table, TableStyle
 
 
 def register_cn_font():
@@ -222,6 +222,10 @@ def styled_table(data, col_widths=None, kind="stock", compact=False, numeric_col
     for ri, row in enumerate(data):
         wr = []
         for ci, cell in enumerate(row):
+            # 已是 Flowable（如 Paragraph）→ 透传，避免 str(Paragraph) 得到 repr 再二次包装
+            if isinstance(cell, Flowable):
+                wr.append(cell)
+                continue
             s = str(cell) if cell is not None else ""
             # 含 < 则视为 XML 标记（如 <font>），需 Paragraph 解析；首行表头也用 Paragraph 保持一致
             if "<" in s or ri == 0:
