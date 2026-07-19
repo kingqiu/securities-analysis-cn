@@ -1,0 +1,17 @@
+{
+  "ts_code": "588000.SH",
+  "source": "tdx_quotes (setcode=1, hasCalcInfo=1, hasCwInfo=1)",
+  "quote_date": "20260717",
+  "hq_time": "153050",
+  "fetched_at": "2026-07-19",
+  "current_price": 1.807,
+  "prev_close": 1.945,
+  "change_pct": -7.1,
+  "iopv": 1.8111,
+  "amount": 14287476700,
+  "turnover_rate": 20.467474,
+  "aum_yuan": 67626377200,
+  "total_share": 3742466.75,
+  "underlying_index": "000688",
+  "note": "current_price=HQInfo.Now(现价); prev_close=HQInfo.Close(昨收); iopv=HQInfo.Jjjz。单日溢折率=(现价-IOPV)/IOPV*100。"
+}

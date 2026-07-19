@@ -232,8 +232,16 @@ def build_etf(code, fin):
     idx_code = fin.get("index_code", "000688.SH")
     idx_name = fin.get("index_name", "科创50")
     ts_code = fin.get("ts_code", code + ".SH")
+    custodian = fin.get("custodian", "")
+    found_date = fin.get("found_date") or fin.get("establish_date", "")
+    m_fee = fin.get("m_fee")
+    c_fee = fin.get("c_fee")
+    total_fee = fin.get("total_fee")
+    aum_yi = fin.get("aum_yi")
+    total_share_yi = fin.get("total_share_yi")
+    turnover_rate = fin.get("turnover_rate")
 
-    daily = fetch_etf_daily(code)
+    daily = fetch_etf_daily(code, days=300)
     print(f"  etf daily={len(daily)}")
     # 跟踪指数日线（科创50=000688 上证，setcode 沪）
     try:
@@ -246,21 +254,70 @@ def build_etf(code, fin):
         print(f"  指数取数失败({e})，用ETF自身作基准")
         idx = daily[["trade_date","close"]].copy()
 
-    # 场内实时状态：从日线末两根算涨跌幅/成交额
-    cur_price = float(daily["close"].iloc[-1])
-    change_pct = round((cur_price / float(daily["close"].iloc[-2]) - 1) * 100, 2) if len(daily) >= 2 else "N/A"
-    amount = float(daily["amount"].iloc[-1]) if "amount" in daily.columns and pd.notna(daily["amount"].iloc[-1]) else "N/A"
+    # 场内实时状态：优先读 TDX 落盘的实时行情快照（零 token，已落盘 tdx_raw/<code>_quote.json）。
+    # 快照含 现价/IOPV/成交额/换手率，全部来自同一时刻，可直接估算单日溢折率。
+    # 字段说明：current_price=HQInfo.Now(现价)；prev_close=HQInfo.Close(昨收)；iopv=HQInfo.Jjjz。
+    quote_file = os.path.join(PROJECT_DIR, "tdx_raw", f"{code}_quote.json")
+    q_price = q_change = q_amount = q_turnover = q_iopv = None
+    if os.path.exists(quote_file):
+        with open(quote_file, encoding="utf-8") as f:
+            q = json.load(f)
+        q_price = q.get("current_price"); q_change = q.get("change_pct")
+        q_amount = q.get("amount"); q_turnover = q.get("turnover_rate"); q_iopv = q.get("iopv")
+        turnover_rate = q_turnover if q_turnover is not None else turnover_rate
+        print(f"  实时行情来自 TDX 落盘快照(日期 {q.get('quote_date')}, 现价 {q_price})", flush=True)
+    else:
+        # 回退：由日线末两根算涨跌/成交额
+        q_price = float(daily["close"].iloc[-1])
+        q_change = round((q_price / float(daily["close"].iloc[-2]) - 1) * 100, 2) if len(daily) >= 2 else "N/A"
+        q_amount = float(daily["amount"].iloc[-1]) if "amount" in daily.columns and pd.notna(daily["amount"].iloc[-1]) else "N/A"
 
-    rt = {"price": cur_price, "change_pct": change_pct, "amount": amount, "source": "akshare_etf"}
+    rt = {"price": q_price, "prev_close": q.get("prev_close") if os.path.exists(quote_file) else None,
+          "change_pct": q_change, "amount": q_amount,
+          "turnover_rate": q_turnover, "iopv": q_iopv, "source": "tdx_quote_snapshot"}
+
+    # 指数估值历史（TDX 落盘，tdx_raw/<指数>_index_pe.json）：用于 PE 历史分位。
+    # 字段为 [trade_date, pe]（TDX ph_agf10_gzfx 返回的为 PE 历史序列）。
+    index_dailybasic = None
+    pe_file = os.path.join(PROJECT_DIR, "tdx_raw", f"{idx_code.split('.')[0]}_index_pe.json")
+    if os.path.exists(pe_file):
+        with open(pe_file, encoding="utf-8") as f:
+            pe = json.load(f)
+        pdf = pd.DataFrame(pe["items"], columns=pe["fields"])
+        pdf["trade_date"] = pdf["trade_date"].astype(str)
+        pdf["pe"] = pd.to_numeric(pdf["pe"], errors="coerce")
+        index_dailybasic = {"fields": ["trade_date", "pe"],
+                            "items": pdf[["trade_date", "pe"]].values.tolist()}
+        print(f"  指数PE历史来自 TDX 落盘({len(pdf)}行), 最新PE {pdf['pe'].dropna().iloc[-1]}", flush=True)
 
     data = {
         "ts_code": ts_code, "index_code": idx_code, "fetch_time": datetime.now().isoformat(),
-        "basic": {"fields": ["name","management","fund_type","benchmark"],
-                  "items": [[name, mgmt, "ETF", idx_name]]},
+        "basic": {"fields": ["name","management","fund_type","benchmark","custodian","found_date",
+                             "m_fee","c_fee","total_fee","aum_yi","total_share_yi","turnover_rate","iopv"],
+                  "items": [[name, mgmt, "ETF", idx_name, custodian, found_date,
+                             m_fee, c_fee, total_fee, aum_yi, total_share_yi, q_turnover, q_iopv]]},
         "daily": {"fields": list(daily.columns), "items": _items(daily)},
         "index_daily": {"fields": ["trade_date","close"], "items": _items(idx)},
         "realtime_quote": rt,
     }
+    if index_dailybasic is not None:
+        data["index_dailybasic"] = index_dailybasic
+
+    # 单日溢折率估算（收盘价 vs IOPV，均来自同一 TDX 快照；历史分位需 NAV 日度序列，此处留空）
+    if q_price is not None and q_iopv:
+        try:
+            prem = round((float(q_price) - float(q_iopv)) / float(q_iopv) * 100, 2)
+            data["premium_disc"] = {
+                "current_premium": prem,
+                "premium_percentile": None,
+                "max_premium": None,
+                "min_premium": None,
+                "avg_premium": None,
+                "note": "基于TDX快照现价与IOPV估算（单日），历史分位需单位净值日度序列",
+            }
+            print(f"  溢折率≈{prem}% (收盘 {q_price} vs IOPV {q_iopv})", flush=True)
+        except Exception as e:
+            print(f"  溢折率计算失败: {e}", flush=True)
 
     # A：尝试补 nav（单位净值）→ 溢价/折价。ETF 通常无 open_fund 净值，失败/空则跳过(B兜底N/A)
     try:

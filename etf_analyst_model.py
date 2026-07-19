@@ -13,6 +13,14 @@ def _f(value, default=None):
         return default
 
 
+def _w(value, suffix="%"):
+    """权重/百分比展示：数值→'x.x%'，None/非数值(N/A/未获取)→'未获取'（不留 'N/A%'）。"""
+    try:
+        return f"{float(value):.1f}{suffix}"
+    except (TypeError, ValueError):
+        return "未获取"
+
+
 def classify_etf(name: str, index_code: str = "") -> str:
     text = f"{name} {index_code}"
     if any(k in text for k in ("沪深300", "中证500", "创业板", "科创50", "上证50", "500", "300")):
@@ -230,7 +238,7 @@ def render_etf_research_brief(view: dict) -> str:
         f"- 正向触发器：{view.get('add_condition')}",
         f"- 高估值复核：{view.get('rebalance_condition')}",
         f"- 策略适配：定投={view.get('strategy_fit', {}).get('定投')}；波段={view.get('strategy_fit', {}).get('波段')}；资产配置={view.get('strategy_fit', {}).get('资产配置')}",
-        f"- 成分集中度：前十大{view.get('top10_weight', 'N/A')}%，前二十大{view.get('top20_weight', 'N/A')}%；行业权重状态：{view.get('industry_weight_status')}",
+        f"- 成分集中度：前十大{_w(view.get('top10_weight'))}，前二十大{_w(view.get('top20_weight'))}；行业权重状态：{view.get('industry_weight_status')}",
         "核心依据：",
     ])
     lines.extend([f"  - {x}" for x in view.get("notes", [])])

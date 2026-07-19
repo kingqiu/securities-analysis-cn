@@ -126,6 +126,9 @@ def _load(json_file):
     if "realtime_quote" in raw and isinstance(raw["realtime_quote"], dict):
         d["realtime_quote"] = raw["realtime_quote"]
 
+    if "premium_disc" in raw and isinstance(raw["premium_disc"], dict):
+        d["premium_disc"] = raw["premium_disc"]
+
     if "free_market_data" in raw:
         d["free_market_data"] = raw["free_market_data"]
 
@@ -280,7 +283,8 @@ def _decompose_tracking_diff(fund_df, index_df):
 
 
 def _index_valuation_percentile(index_dailybasic_df):
-    """指数估值分位"""
+    """指数估值分位。支持仅含 PE 的序列（TDX ph_agf10_gzfx 返回的 PE 历史），
+    PB 缺失时仅计算 PE 分位，PB 相关字段返回 None（诚实降级，不伪造）。"""
     if index_dailybasic_df is None or index_dailybasic_df.empty:
         return {}
 
@@ -290,11 +294,11 @@ def _index_valuation_percentile(index_dailybasic_df):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    if "pe" not in df.columns or "pb" not in df.columns:
+    if "pe" not in df.columns:
         return {}
 
     latest_pe = df["pe"].iloc[-1] if not df["pe"].dropna().empty else None
-    latest_pb = df["pb"].iloc[-1] if not df["pb"].dropna().empty else None
+    latest_pb = df["pb"].iloc[-1] if "pb" in df.columns and not df["pb"].dropna().empty else None
 
     pe_percentile = None
     pb_percentile = None
@@ -302,7 +306,7 @@ def _index_valuation_percentile(index_dailybasic_df):
     if latest_pe is not None and not df["pe"].dropna().empty:
         pe_percentile = round((df["pe"] < latest_pe).sum() / len(df["pe"].dropna()) * 100, 1)
 
-    if latest_pb is not None and not df["pb"].dropna().empty:
+    if "pb" in df.columns and latest_pb is not None and not df["pb"].dropna().empty:
         pb_percentile = round((df["pb"] < latest_pb).sum() / len(df["pb"].dropna()) * 100, 1)
 
     return {
@@ -358,7 +362,12 @@ def _calc_premium_discount(nav_df, daily_df):
 
 def _index_concentration(index_weight_df):
     if index_weight_df is None or index_weight_df.empty or "weight" not in index_weight_df.columns:
-        return {}
+        return {
+            "top10_weight": "未获取",
+            "top20_weight": "未获取",
+            "top_count": 0,
+            "industry_weight_status": "TDX 暂未提供成分股权重数据，无法计算成分集中度（本 ETF 被动跟踪科创50指数 000688）",
+        }
     df = index_weight_df.copy()
     df["weight"] = pd.to_numeric(df["weight"], errors="coerce")
     df = df.dropna(subset=["weight"]).sort_values("weight", ascending=False)
@@ -379,7 +388,7 @@ SIGNAL_THRESHOLDS = {
     "premium_abs": [(1.0, "●", "#1e8449", "接近平价(≤1%)"), (3.0, "●", "#BA7517", "温和偏离(1-3%)"), (100, "●", "#c0392b", "偏离较大(>3%)")],
     "aum":         [(2, "●", "#c0392b", "偏小(<2亿,清盘风险)"), (20, "●", "#BA7517", "中等(2-20亿)"), (100000, "●", "#1e8449", "充裕(>20亿)")],
     "fee":         [(0.3, "●", "#1e8449", "低(<0.3%)"), (0.6, "●", "#BA7517", "适中(0.3-0.6%)"), (100, "●", "#c0392b", "偏高(>0.6%)")],
-    "ret_y":       [(15, "●", "#1e8449", "强(>15%)"), (0, "●", "#BA7517", "正收益(0-15%)"), (-100, "●", "#c0392b", "负收益(<0%)")],
+    "ret_y":       [(0, "●", "#c0392b", "负收益(<0%)"), (15, "●", "#BA7517", "正收益(0-15%)"), (100000, "●", "#1e8449", "强(>15%)")],
     "top10_weight":[(40, "●", "#1e8449", "分散(<40%)"), (60, "●", "#BA7517", "集中(40-60%)"), (100, "●", "#c0392b", "高度集中(>60%)")],
 }
 
@@ -395,8 +404,9 @@ def _signal(metric, value):
     thresholds = SIGNAL_THRESHOLDS.get(metric)
     if not thresholds:
         return ("", "", "")
+    # 阈值为「上界，升序」：v <= boundary 时落入该档（如 pe_pct=50.9 → 50.9<=70 → 适中）
     for boundary, emoji, color, label in thresholds:
-        if v >= boundary:
+        if v <= boundary:
             return (emoji, color, label)
     return ("●", "#c0392b", "偏弱")
 
@@ -445,6 +455,44 @@ def _to_num(v):
         return None
 
 
+def _fmt_pct(v):
+    """数值加 %，非数值（如 '未获取'）原样返回——用于诚实降级显示。"""
+    try:
+        return f"{float(v):.2f}%"
+    except (TypeError, ValueError):
+        return str(v)
+
+
+def _fmt_wan(v):
+    """数值加 '万份'，非数值（如 '未获取'）原样返回。"""
+    try:
+        return f"{float(v):.2f}万份"
+    except (TypeError, ValueError):
+        return str(v)
+
+
+def _disp_pct(v):
+    """百分比显示：数值→'x.x%'，None/非数值→'未获取'（诚实降级，不留 'None%'）。"""
+    try:
+        f = float(v)
+        if f != f:  # NaN
+            return "未获取"
+        return f"{f:.1f}%"
+    except (TypeError, ValueError):
+        return "未获取"
+
+
+def _disp_num(v, nd=2):
+    """数值显示：数值→'x.xx'，None/非数值→'未获取'（PE/PB 等比值用，不加 %）。"""
+    try:
+        f = float(v)
+        if f != f:  # NaN
+            return "未获取"
+        return f"{f:.{nd}f}"
+    except (TypeError, ValueError):
+        return "未获取"
+
+
 def _tldr_etf(s):
     """可读性改进1：核心要点速览（TL;DR）—— 带信号灯的大白话结论。返回 list[str]。"""
     items = []
@@ -490,7 +538,7 @@ def _tldr_etf(s):
         e, c, l = _signal("ret_y", ry)
         items.append(f'6. <b>近1年收益：</b>{s.get("ret_1y")}% <font color="{c}">{e} {l}</font>')
     # 7. 资金面
-    items.append(f'7. <b>资金面：</b>近20日份额趋势 {s.get("flow_trend","未知")}（{s.get("net_flow_20d","N/A")}万份）')
+    items.append(f'7. <b>资金面：</b>近20日份额趋势 {s.get("flow_trend","未获取")}（{_fmt_wan(s.get("net_flow_20d","未获取"))}）')
     # 一句话
     parts = []
     if ip is not None:
@@ -599,7 +647,7 @@ def _multi_perspective_etf(s):
         tp_view, tp_bulb = "近20日份额净赎回，资金面偏弱，需警惕流动性下降。", '<font color="#c62828">●</font>'
     else:
         tp_view, tp_bulb = "资金面趋势未知，短期信号中性。", '<font color="#f9a825">●</font>'
-    tp_facts = [f"份额趋势{flow}", f"20日{s.get('net_flow_20d','N/A')}万份"]
+    tp_facts = [f"份额趋势{flow}", f"20日{_fmt_wan(s.get('net_flow_20d','未获取'))}"]
     items.append({"lens": "趋势派", "focus": "资金申赎 + 价格动能",
                   "view": f"【判断】{tp_view}（{('，'.join(tp_facts))}）", "bulb": tp_bulb})
 
@@ -691,7 +739,7 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     flow_metrics = _calc_flow_metrics(share_df)
     te_decomp = _decompose_tracking_diff(daily_df, index_df)
     index_val = _index_valuation_percentile(index_dailybasic_df)
-    premium_disc = _calc_premium_discount(nav_df, daily_df)
+    premium_disc = d.get("premium_disc") or _calc_premium_discount(nav_df, daily_df)
     concentration = _index_concentration(index_weight_df)
 
     m_fee = float(basic.get("m_fee") or 0)
@@ -699,14 +747,17 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     total_fee = round(m_fee + c_fee, 4)
 
     aum_bn = "N/A"
-    if share_df is not None and not share_df.empty:
+    _basic_aum = basic.get("aum_yi")
+    if _basic_aum:
+        aum_bn = round(float(_basic_aum), 1)
+    elif share_df is not None and not share_df.empty:
         share_df2 = share_df.copy()
         col = "net_asset" if "net_asset" in share_df2.columns else "fd_share"
         share_df2[col] = pd.to_numeric(share_df2[col], errors="coerce")
         latest_val = share_df2[col].dropna().iloc[-1] if not share_df2[col].dropna().empty else None
         if latest_val:
-            # fd_share 单位是万份，net_asset 单位是元
-            aum_bn = round(latest_val / 1e4, 1) if col == "net_asset" else round(latest_val / 1e4, 1)
+            # fd_share 单位是万份 → /1e4 得亿份；net_asset 单位是元 → /1e8 得亿元
+            aum_bn = round(latest_val / 1e4, 1) if col == "fd_share" else round(latest_val / 1e8, 1)
 
     # 同类排名
     similar_rank = "N/A"
@@ -740,9 +791,9 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         "index_pb_pct": index_val.get("pb_percentile", "N/A") if index_val else "N/A",
         "premium": premium_disc.get("current_premium", "N/A") if premium_disc else "N/A",
         "premium_pct": premium_disc.get("premium_percentile", "N/A") if premium_disc else "N/A",
-        "flow_trend": flow_metrics.get("trend_20d", "未知") if flow_metrics else "未知",
-        "net_flow_20d": flow_metrics.get("net_flow_20d", "N/A") if flow_metrics else "N/A",
-        "net_flow_60d": flow_metrics.get("net_flow_60d", "N/A") if flow_metrics else "N/A",
+        "flow_trend": flow_metrics.get("trend_20d", "未获取") if flow_metrics else "未获取",
+        "net_flow_20d": flow_metrics.get("net_flow_20d", "未获取") if flow_metrics else "未获取",
+        "net_flow_60d": flow_metrics.get("net_flow_60d", "未获取") if flow_metrics else "未获取",
         "top10_weight": concentration.get("top10_weight", "N/A"),
         "top20_weight": concentration.get("top20_weight", "N/A"),
         "industry_weight_status": concentration.get("industry_weight_status", "缺少行业映射"),
@@ -827,8 +878,8 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     story.append(Spacer(1, 0.3*cm))
     story.append(metric_cards([
         ["跟踪误差", f"{etf_summary.get('tracking_error')}%", "年化口径"],
-        ["溢价/折价", f"{etf_summary.get('premium')}%", f"分位 {etf_summary.get('premium_pct')}%"],
-        ["近60日份额", f"{etf_summary.get('net_flow_60d')}万份", "资金申赎趋势"],
+        ["溢价/折价", f"{etf_summary.get('premium')}%", f"分位 {_disp_pct(etf_summary.get('premium_pct'))}"],
+        ["近60日份额", _fmt_wan(etf_summary.get('net_flow_60d')), "资金申赎趋势"],
     ], kind="etf"))
     story.append(Spacer(1, 0.3*cm))
 
@@ -851,14 +902,14 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         ],
         [
             "折溢价是否影响交易体验",
-            f"当前溢价 {etf_summary.get('premium')}%；历史分位 {etf_summary.get('premium_pct')}%",
+            f"当前溢价 {etf_summary.get('premium')}%；历史分位 {_disp_pct(etf_summary.get('premium_pct'))}",
             "中等",
             "折溢价提示场内价格与净值偏离，尤其影响短期成交体验。",
             "盘中IOPV、成交深度、申赎机制",
         ],
         [
             "规模和份额是否稳定",
-            f"规模 {aum_bn}亿元；近60日份额变化 {etf_summary.get('net_flow_60d')}万份",
+            f"规模 {aum_bn}亿元；近60日份额变化 {_fmt_wan(etf_summary.get('net_flow_60d'))}",
             "较强",
             "规模和份额变化有助于观察资金配置热度和流动性基础。",
             "持续申赎、成交额、做市活跃度",
@@ -868,7 +919,7 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     add_followup_watchlist(story, [
         [
             "指数估值与暴露",
-            f"指数PE分位 {etf_summary.get('index_pe_pct')}%；Top10权重 {etf_summary.get('top10_weight')}%",
+            f"指数PE分位 {etf_summary.get('index_pe_pct')}%；Top10权重 {_fmt_pct(etf_summary.get('top10_weight'))}",
             "每月或指数成分调整后",
             "复核估值分位、行业权重和成分集中度，确认指数暴露是否仍符合预期。",
         ],
@@ -880,13 +931,13 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         ],
         [
             "折溢价与成交体验",
-            f"当前溢价 {etf_summary.get('premium')}%；历史分位 {etf_summary.get('premium_pct')}%；换手 {etf_summary.get('turnover_rate')}%",
+            f"当前溢价 {etf_summary.get('premium')}%；历史分位 {_disp_pct(etf_summary.get('premium_pct'))}；换手 {etf_summary.get('turnover_rate')}%",
             "未来5-20个交易日",
             "结合IOPV、成交额和申赎机制判断偏离是否短期，避免把单日折溢价当作结论。",
         ],
         [
             "规模与份额变化",
-            f"规模 {aum_bn}亿元；20日份额变化 {etf_summary.get('net_flow_20d')}万份；60日份额变化 {etf_summary.get('net_flow_60d')}万份",
+            f"规模 {aum_bn}亿元；20日份额变化 {_fmt_wan(etf_summary.get('net_flow_20d','未获取'))}；60日份额变化 {_fmt_wan(etf_summary.get('net_flow_60d','未获取'))}",
             "未来20-60个交易日",
             "观察份额是否持续申购或赎回，并结合成交额判断流动性基础是否变化。",
         ],
@@ -913,9 +964,9 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     pro_rows = [
         ["专业维度", "当前读数", "解读"],
         ["跟踪误差", _signal_text("te", etf_summary.get("tracking_error")) + f" / 日均偏差{etf_summary.get('tracking_bias')}%", "越低说明跟踪指数越稳定，持续偏差需复核现金拖累、费用和复制误差"],
-        ["溢价/折价", _signal_text("premium_abs", abs(_to_num(etf_summary.get("premium"))) if etf_summary.get("premium") not in (None, "N/A") else None) + f"（分位{etf_summary.get('premium_pct')}%）", "高溢价说明场内价格容错较低，折价需结合流动性和申赎机制判断"],
-        ["份额变化", f"20日{etf_summary.get('net_flow_20d')}万份；60日{etf_summary.get('net_flow_60d')}万份", "份额扩张代表资金配置热度改善，持续赎回需警惕流动性下降"],
-        ["成分集中度", _signal_text("top10_weight", etf_summary.get("top10_weight")) + f"；Top20 {etf_summary.get('top20_weight')}%", "集中度越高，龙头股或单一行业波动对ETF影响越大"],
+        ["溢价/折价", _signal_text("premium_abs", abs(_to_num(etf_summary.get("premium"))) if etf_summary.get("premium") not in (None, "N/A") else None) + f"（分位{_disp_pct(etf_summary.get('premium_pct'))}）", "高溢价说明场内价格容错较低，折价需结合流动性和申赎机制判断"],
+        ["份额变化", f"20日{_fmt_wan(etf_summary.get('net_flow_20d','未获取'))}；60日{_fmt_wan(etf_summary.get('net_flow_60d','未获取'))}", "份额扩张代表资金配置热度改善，持续赎回需警惕流动性下降"],
+        ["成分集中度", _signal_text("top10_weight", etf_summary.get("top10_weight")) + f"；Top20 {_fmt_pct(etf_summary.get('top20_weight'))}", "集中度越高，龙头股或单一行业波动对ETF影响越大"],
         ["行业权重", etf_summary.get("industry_weight_status"), "后续可接入成分股行业映射后输出行业暴露矩阵"],
         ["策略适配", f"定投{etf_view.get('strategy_fit', {}).get('定投')}；波段{etf_view.get('strategy_fit', {}).get('波段')}；资产配置{etf_view.get('strategy_fit', {}).get('资产配置')}", "不同研究目的对应不同观察频率和反证条件"],
     ]
@@ -1001,11 +1052,16 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         if concentration:
             story.append(Spacer(1, 0.2*cm))
             story.append(Paragraph(
-                f"指数成分集中度：前十大权重合计{concentration.get('top10_weight','N/A')}%，前二十大权重合计{concentration.get('top20_weight','N/A')}%。{concentration.get('industry_weight_status','')}",
+                f"指数成分集中度：前十大权重合计{_fmt_pct(concentration.get('top10_weight','未获取'))}，前二十大权重合计{_fmt_pct(concentration.get('top20_weight','未获取'))}。{concentration.get('industry_weight_status','')}",
                 st["caption"]
             ))
     else:
-        story.append(Paragraph("持仓数据暂不可用", st["body"]))
+        story.append(Paragraph(
+            "持仓数据暂未通过 TDX 获取。本 ETF 为被动指数基金，完全复制科创50指数（000688）"
+            "成分股及权重；当前 TDX 接口未返回基金持仓明细与成分股权重序列，故成分集中度与持仓明细暂无法计算。"
+            "该缺口为数据源限制，非模型缺陷；如需补充可在 TDX 接入基金持仓 F10 后重算。",
+            st["body"]
+        ))
     story.append(Spacer(1, 0.3*cm))
 
     # ── 四点五、基金经理 ──
@@ -1122,10 +1178,10 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         story.append(Paragraph("7.5 跟踪指数估值位置", st["h2"]))
         val_rows = [
             ["指标", "当前值", "历史分位（越低越便宜）"],
-            ["市盈率 PE", str(index_val.get("current_pe", "N/A")),
-             _signal_text("pe_pct", index_val.get("pe_percentile")) if index_val.get("pe_percentile") is not None else "N/A"],
-            ["市净率 PB", str(index_val.get("current_pb", "N/A")),
-             _signal_text("pe_pct", index_val.get("pb_percentile")) if index_val.get("pb_percentile") is not None else "N/A"],
+            ["市盈率 PE", _disp_num(index_val.get("current_pe")),
+             _signal_text("pe_pct", index_val.get("pe_percentile")) if index_val.get("pe_percentile") is not None else "未获取"],
+            ["市净率 PB", _disp_num(index_val.get("current_pb")),
+             _signal_text("pe_pct", index_val.get("pb_percentile")) if index_val.get("pb_percentile") is not None else "未获取"],
         ]
         story.append(_tbl(val_rows, col_widths=[4*cm, 3*cm, 5*cm]))
         story.append(Spacer(1, 0.2*cm))
@@ -1137,12 +1193,14 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         prem_rows = [
             ["指标", "数值"],
             ["当前溢折率", f"{_signal_text('premium_abs', abs(prem))}（{prem_label}）"],
-            ["历史分位", f"{premium_disc.get('premium_percentile','N/A')}%"],
-            ["近1年最高溢价", f"{premium_disc.get('max_premium','N/A')}%"],
-            ["近1年最低折价", f"{premium_disc.get('min_premium','N/A')}%"],
-            ["近1年均值", f"{premium_disc.get('avg_premium','N/A')}%"],
+            ["历史分位", _disp_pct(premium_disc.get('premium_percentile'))],
+            ["近1年最高溢价", _disp_pct(premium_disc.get('max_premium'))],
+            ["近1年最低折价", _disp_pct(premium_disc.get('min_premium'))],
+            ["近1年均值", _disp_pct(premium_disc.get('avg_premium'))],
         ]
         story.append(_tbl(prem_rows, col_widths=[6*cm, 6*cm]))
+        if premium_disc.get("note"):
+            story.append(Paragraph(premium_disc["note"], st["caption"]))
         story.append(Spacer(1, 0.3*cm))
 
     # ── 八、风险提示 ──

@@ -1,7 +1,1 @@
-{
-  "name": "科创50ETF",
-  "ts_code": "588000.SH",
-  "management": "华夏基金",
-  "index_code": "000688.SH",
-  "index_name": "科创50"
-}
+{"name": "科创50ETF", "ts_code": "588000.SH", "management": "华夏基金", "index_code": "000688.SH", "index_name": "科创50", "aum_yi": 676.26, "m_fee": 0.15, "c_fee": 0.05, "total_fee": 0.2, "total_share_yi": 517.89, "turnover_rate": 20.47, "establish_date": "2020-09-28", "tdx_fetched_at": "2026-07-19T11:35:00+08:00"}
