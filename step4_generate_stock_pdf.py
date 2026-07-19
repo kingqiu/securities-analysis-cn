@@ -79,6 +79,216 @@ def _tbl(data, col_widths=None, header_bg="#8b1a1a"):
     return styled_table(data, col_widths=col_widths, kind="stock")
 
 
+# ── 可读性增强：信号灯 + 术语释义 ─────────────────────────────────────
+
+SIGNAL_THRESHOLDS = {
+    "roe":       [(15, "●", "#1e8449", "优秀(>15%)"), (8, "●", "#BA7517", "一般(8-15%)"), (0, "●", "#c0392b", "偏弱(<8%)")],
+    "pe_pct":    [(30, "●", "#1e8449", "偏低(<30%)"), (70, "●", "#BA7517", "适中(30-70%)"), (100, "●", "#c0392b", "偏高(>70%)")],
+    "pe_pct_3y": [(30, "●", "#1e8449", "偏低(<30%)"), (70, "●", "#BA7517", "适中(30-70%)"), (100, "●", "#c0392b", "偏高(>70%)")],
+    "debt":      [(40, "●", "#1e8449", "健康(<40%)"), (70, "●", "#BA7517", "一般(40-70%)"), (100, "●", "#c0392b", "偏高(>70%)")],
+    "cfo_ratio": [(1.0, "●", "#1e8449", "扎实(≥1.0，利润含金量高)"), (0.5, "●", "#BA7517", "一般(0.5-1.0)"), (0, "●", "#c0392b", "偏弱(<0.5，利润质量存疑)")],
+    "gross_margin": [(50, "●", "#1e8449", "高毛利(≥50%)"), (35, "●", "#BA7517", "中等(35-50%)"), (0, "●", "#c0392b", "低毛利(<35%)")],
+    "net_margin":   [(15, "●", "#1e8449", "较高(≥15%)"), (8, "●", "#BA7517", "中等(8-15%)"), (0, "●", "#c0392b", "偏低(<8%)")],
+    "rev_growth":   [(15, "●", "#1e8449", "强劲(>15%)"), (0, "●", "#BA7517", "微增/持平(0-15%)"), (-100, "●", "#c0392b", "负增长(<0%)")],
+    "profit_growth": [(15, "●", "#1e8449", "强劲(>15%)"), (0, "●", "#BA7517", "微增/持平(0-15%)"), (-100, "●", "#c0392b", "负增长(<0%)")],
+    "current_ratio": [(2.0, "●", "#1e8449", "健康(≥2)"), (1.0, "●", "#BA7517", "一般(1-2)"), (0, "●", "#c0392b", "偏低(<1)")],
+    "pledge":       [(5, "●", "#1e8449", "低风险(<5%)"), (10, "●", "#BA7517", "关注(5-10%)"), (100, "●", "#c0392b", "偏高(>10%)")],
+}
+
+def _signal(metric, value):
+    """返回 (emoji, color_hex, label) 信号灯三元组。value 可为 None/str/float。"""
+    if value is None or (isinstance(value, str) and value in ("N/A", "")):
+        return ("–", "#888888", "数据缺失")
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return ("–", "#888888", "数据缺失")
+    thresholds = SIGNAL_THRESHOLDS.get(metric)
+    if not thresholds:
+        return ("", "", "")
+    for boundary, emoji, color, label in thresholds:
+        if v >= boundary:
+            return (emoji, color, label)
+    # 未匹配（负值兜底）
+    return ("●", "#c0392b", "偏弱")
+
+
+def _signal_text(metric, value, suffix=""):
+    """生成带信号灯的 HTML 片段：值 + emoji + 参考区间。用于 Paragraph。"""
+    emoji, color, label = _signal(metric, value)
+    try:
+        v = float(value) if value is not None and str(value) != "N/A" else None
+        val_str = f"{v:.1f}{suffix}" if v is not None else str(value)
+    except (TypeError, ValueError):
+        val_str = str(value)
+    if not emoji:
+        return val_str
+    return f'<font color="{color}">{emoji}</font> {val_str} <font color="{color}">{label}</font>'
+
+
+GLOSSARY = {
+    "PE(TTM)": "市盈率（股价÷最近12个月每股收益），衡量估值高低",
+    "PB": "市净率（股价÷每股净资产），<1可能低估但也可能资产质量差",
+    "ROE": "净资产收益率（净利润÷净资产），每1元股东权益赚多少利润",
+    "CFO/净利比": "经营现金流÷净利润，>1表示利润含金量高（赚到的钱真的到手了）",
+    "权益乘数": "总资产÷净资产，即杠杆倍数。2倍表示1元自有资金撬动2元总资产",
+    "CAGR": "复合年均增长率，假设每年匀速增长的情况下的平均增速",
+    "TTM": "滚动12个月（Trailing Twelve Months），取最近4个季度合计",
+    "毛利率": "（营业收入-营业成本）÷营业收入，衡量产品赚钱能力",
+    "净利率": "归母净利润÷营业收入，衡量最终能留下多少利润",
+    "总资产周转率": "营业收入÷总资产，衡量资产使用效率",
+    "资产负债率": "总负债÷总资产，衡量公司借了多少钱",
+    "流动比率": "流动资产÷流动负债，≥2表示短期偿债能力强",
+    "速动比率": "（流动资产-存货）÷流动负债，≥1表示短期偿债能力强",
+    "PE分位": "当前PE在历史数据中的相对位置，30%表示比70%的历史时间都便宜",
+    "隐含增速": "反向DCF推算：当前股价隐含了市场对未来增长速度的预期",
+    "黑天鹅": "极低概率但冲击巨大的事件，如突发政策、行业崩塌",
+}
+
+
+def _gloss(term):
+    """返回术语释义字符串，无释义则原样返回。"""
+    return GLOSSARY.get(term, term)
+
+
+def _tldr(val, fin, cf_quality, business_engine, bear_case, industry_cycle, stock_name):
+    """可读性改进1：一页纸摘要 TL;DR —— 5-6条带信号灯的大白话结论。
+    返回 list[str]，每条为带 HTML font color 的信号灯 + 参考区间 + 大白话。"""
+    items = []
+    # 1. 估值
+    pe_ttm = val.get("pe_ttm")
+    pe_pct = val.get("pe_pct_3y") or val.get("pe_percentile")
+    e, c, l = _signal("pe_pct", pe_pct)
+    items.append(
+        f"1. <b>估值：</b>PE(TTM) {_gloss('PE(TTM)')} 当前 {pe_ttm or 'N/A'}，近3年分位 {pe_pct or 'N/A'}% "
+        f'<font color="{c}">{e} {l}</font>'
+    )
+    # 2. 盈利能力
+    roe = fin.get("roe")
+    e, c, l = _signal("roe", roe)
+    items.append(
+        f'2. <b>盈利能力：</b>ROE {_gloss("ROE")} 当前 {roe or "N/A"}% '
+        f'<font color="{c}">{e} {l}</font>'
+    )
+    # 3. 现金流质量
+    cfo_ratio = cf_quality.get("latest_ratio") if cf_quality else None
+    e, c, l = _signal("cfo_ratio", cfo_ratio)
+    items.append(
+        f'3. <b>现金流：</b>CFO/净利润 {_gloss("CFO/净利比")} 当前 {cfo_ratio or "N/A"} '
+        f'<font color="{c}">{e} {l}</font>'
+    )
+    # 4. 商业模式
+    if business_engine:
+        gm = business_engine.get("gross_margin")
+        e, c, l = _signal("gross_margin", gm)
+        items.append(
+            f'4. <b>赚钱方式：</b>毛利率 {_gloss("毛利率")} {gm or "N/A"}% '
+            f'<font color="{c}">{e} {l}</font>'
+            f" → {business_engine.get('driver', 'N/A')}"
+        )
+    # 5. 行业周期
+    if industry_cycle:
+        items.append(
+            f'5. <b>行业周期：</b>{industry_cycle.get("stage", "数据不足，暂无判断")}'
+        )
+    # 6. 空方风险
+    if bear_case:
+        bear_count = len(bear_case.get("bear", []))
+        if bear_count >= 3:
+            items.append(f'6. <b>看空信号：</b>检出 <font color="#c0392b">{bear_count}条</font> 量化看空理由，需重点关注。')
+        elif bear_count >= 1:
+            items.append(f'6. <b>看空信号：</b>检出 <font color="#BA7517">{bear_count}条</font> 看空因素，值得跟踪。')
+        else:
+            items.append(f'6. <b>看空信号：</b>未检出显著量化空方信号，但仍需关注系统性风险。')
+    # 综合一句话
+    pe_pct_v = pe_pct
+    roe_v = roe
+    cfo_v = cfo_ratio
+    summary_parts = []
+    if pe_pct_v is not None:
+        summary_parts.append("估值" + ("不算贵" if pe_pct_v < 40 else "偏贵" if pe_pct_v > 70 else "适中"))
+    if roe_v is not None:
+        summary_parts.append("盈利" + ("偏弱" if roe_v < 8 else "较强" if roe_v > 15 else "一般"))
+    if cfo_v is not None:
+        summary_parts.append("利润含金量" + ("扎实" if cfo_v >= 1 else "一般" if cfo_v >= 0.5 else "存疑"))
+    if summary_parts:
+        items.append(f'<b>一句话：</b>{stock_name}当前{", ".join(summary_parts)}，需跟踪业绩与行业变化。')
+    return items
+
+
+def _plain_summary(val, fin, cf_quality, bear_case, stock_name):
+    """可读性改进5：封面 notes 大白话化 —— 根据各指标信号灯拼接一条大白话综合判断。"""
+    pe_pct = val.get("pe_pct_3y") or val.get("pe_percentile")
+    roe = fin.get("roe")
+    cfo = cf_quality.get("latest_ratio") if cf_quality else None
+    rev_g = fin.get("rev_growth")
+    profit_g = fin.get("profit_growth")
+    bear_count = len(bear_case.get("bear", [])) if bear_case else 0
+
+    parts = []
+    if pe_pct is not None:
+        if pe_pct < 30:
+            parts.append("估值偏低，安全边际较好")
+        elif pe_pct < 70:
+            parts.append("估值适中")
+        else:
+            parts.append("估值偏高，需警惕预期透支")
+    if roe is not None:
+        if roe > 15:
+            parts.append("盈利能力较强")
+        elif roe > 8:
+            parts.append("盈利能力中等")
+        else:
+            parts.append("盈利能力偏弱")
+    if cfo is not None:
+        if cfo >= 1:
+            parts.append("利润含金量扎实")
+        elif cfo >= 0.5:
+            parts.append("利润含金量一般")
+        else:
+            parts.append("利润含金量存疑")
+    if rev_g is not None or profit_g is not None:
+        if (rev_g or 0) > 0 and (profit_g or 0) > 0:
+            parts.append("收入与利润仍在增长")
+        elif (profit_g or 0) <= 0:
+            parts.append("利润增长承压")
+
+    summary = "、".join(parts) if parts else "核心指标需进一步跟踪验证"
+    if bear_count >= 3:
+        summary += "。有多个看空信号需重点关注"
+    elif bear_count >= 1:
+        summary += "。存在部分看空因素值得跟踪"
+
+    return f"{stock_name}当前{summary}。"
+
+
+def _chapter_intro(chapter_key):
+    """可读性改进4：章节白话导语 —— 每个章节开头一句"这节回答什么问题"。"""
+    INTROS = {
+        "公司概况": "这节回答：这家公司是做什么的？在行业里处于什么位置？",
+        "情景区间": "这节回答：基于当前估值和业绩，股价大概在什么区间？用于观察估值与风险状态，不构成买卖建议。",
+        "股价估值": "这节回答：这家公司现在贵不贵？和历史相比处于什么水平？",
+        "业绩分析": "这节回答：这家公司赚钱能力怎么样？收入和利润在增长还是下滑？",
+        "财务健康": "这节回答：公司财务状况是否健康？有没有负债过高、现金流差等隐患？",
+        "现金流": "这节回答：赚到的利润真的变成现金了吗？利润含金量如何？",
+        "杜邦": "这节回答：ROE靠什么驱动？是产品利润率高、还是资产效率好、还是借了杠杆？",
+        "资产负债": "这节回答：公司偿债能力怎么样？会不会还不上短期债务？",
+        "同行对比": "这节回答：和同行业其他公司比，这家公司估值是偏高还是偏低？盈利能力处于什么水平？",
+        "三情景": "这节回答：如果未来一年乐观/中性/悲观，股价大概在什么范围？",
+        "资金面": "这节回答：近期聪明钱在买还是卖？市场热度怎么样？",
+        "分红": "这节回答：这家公司给股东分红吗？分红慷慨还是吝啬？",
+        "业绩预告": "这节回答：公司自己预测下期业绩大概怎样？是增长还是下滑？",
+        "股东结构": "这节回答：谁在持有这家公司？大股东稳定还是频繁变动？",
+        "赚钱机制": "这节回答：这家公司到底靠什么赚钱？是产品溢价、还是规模效率、还是高周转走量？",
+        "行业周期": "这节回答：行业现在处于什么阶段？是扩张期还是出清期？对公司意味着什么？",
+        "空方逻辑": "这节回答：有哪些看空的理由？可能出什么黑天鹅？（对抗确认偏误，强制列出）",
+        "反向DCF": "这节回答：不预测股价，而是反推：当前市值定价了多少未来增长？预期是否透支？",
+        "监控清单": "这节回答：未来需要跟踪哪些关键事件和数据？什么信号会强化或证伪当前判断？",
+        "数据来源": "这节回答：这份报告的数据从哪来的？取数时间是什么？可信度如何？",
+    }
+    return INTROS.get(chapter_key, "")
+
+
 def _chart_to_image(fig, width=14*cm):
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     fig.savefig(tmp.name, dpi=150, bbox_inches="tight")
@@ -1096,13 +1306,27 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
             ["PE(TTM)", str(val.get("pe_ttm", "N/A")), f"历史分位 {val.get('pe_percentile', 'N/A')}%"],
         ],
         notes=[
-            ["核心结论", f"【判断】当前PE(TTM){val.get('pe_ttm','N/A')}、历史分位{val.get('pe_percentile','N/A')}%，ROE{fin.get('roe','N/A')}%；估值不高但增长与现金流仍需验证。"],
-            ["关注变量", "【判断】估值分位、业绩增长、现金流质量、资金技术和行业景气度共同影响研究判断。"],
-            ["主要风险", "【判断】消费需求、行业竞争、政策变化、估值中枢下移及市场系统性波动。"],
+            ["核心结论", f"【判断】{_plain_summary(val, fin, cf_quality, bear_case, stock_name)}"],
+            ["关注变量", f"【判断】需重点跟踪：估值分位变化、营收与利润增速趋势、现金流是否持续改善、主力资金流向与行业景气信号。"],
+            ["主要风险", f"【判断】主要风险来自行业竞争、政策变化、估值中枢下移及市场系统性波动；具体看空理由详见「二十一、空方逻辑与风险推演」。"],
         ],
     )
 
     add_report_reading_guide(story, kind="stock")
+
+    # ── 可读性改进1：核心要点速览（TL;DR）──
+    tldr_items = _tldr(val, fin, cf_quality, business_engine, bear_case, industry_cycle, stock_name)
+    if tldr_items:
+        story.append(PageBreak())
+        story.append(Paragraph("核心要点速览", st["h1"]))
+        story.append(Paragraph(
+            "以下为报告核心指标的大白话总结，每个指标带信号灯（●绿色=优 / ●黄色=中 / ●红色=劣）和参考区间，帮助快速理解「这个数意味着什么」。详细数据见后续各章节。",
+            st["caption"]
+        ))
+        story.append(Spacer(1, 0.3*cm))
+        for item in tldr_items:
+            story.append(Paragraph(item, st["body"]))
+        story.append(Spacer(1, 0.3*cm))
 
     # P1-10：事实/判断标注约定
     story.append(Paragraph(
@@ -1113,6 +1337,9 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
 
     # ── 一、公司概况 ──
     story.append(Paragraph("一、公司概况", st["h1"]))
+    intro = _chapter_intro("公司概况")
+    if intro:
+        story.append(Paragraph(intro, st["caption"]))
     info_rows = [
         ["股票名称", stock_name, "股票代码", d["ts_code"]],
         ["所属行业", industry, "所在地区", basic.get("area","")],
@@ -1124,10 +1351,17 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     ]
     story.append(_tbl(info_rows, col_widths=[3.5*cm, 5.5*cm, 3.5*cm, 5.5*cm]))
     story.append(Spacer(1, 0.3*cm))
+    # 可读性改进2：指标卡片加信号灯与术语释义
+    roe_v = fin.get('roe')
+    rev_g_v = fin.get('rev_growth')
+    cfo_v = cf_quality.get("latest_ratio") if cf_quality else None
+    roe_signal = _signal_text("roe", roe_v, "%")
+    rev_signal = _signal_text("rev_growth", rev_g_v, "%")
+    cfo_signal = _signal_text("cfo_ratio", cfo_v)
     story.append(metric_cards([
-        ["ROE", f"{fin.get('roe', 'N/A')}%", "盈利能力"],
-        ["营收增速", f"{fin.get('rev_growth', 'N/A')}%", "成长性"],
-        ["现金流质量", cf_quality.get("quality_label", "N/A") if cf_quality else "N/A", "利润含金量"],
+        [f"ROE（{_gloss('ROE')}）", roe_signal, "盈利能力"],
+        [f"营收增速（{_gloss('CAGR')}）", rev_signal, "成长性"],
+        [f"现金流质量（{_gloss('CFO/净利比')}）", cfo_signal, "利润含金量"],
     ], kind="stock"))
     story.append(Spacer(1, 0.3*cm))
 
@@ -1191,6 +1425,9 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
 
     # ── 二、情景区间与观察触发器 ──
     story.append(Paragraph("二、情景区间与观察触发器", st["h1"]))
+    intro = _chapter_intro("情景区间")
+    if intro:
+        story.append(Paragraph(intro, st["caption"]))
     story.append(callout_box("本节仅把模型测算结果整理为估值情景、风险复核线和后续观察触发器，用于研究复盘；不构成任何买卖建议。", kind="stock"))
     story.append(Spacer(1, 0.2*cm))
     plan_chart = _trading_plan_chart(analyst_view, stock_name)
@@ -1220,6 +1457,9 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
 
     # ── 三、股价与估值 ──
     story.append(Paragraph("三、股价与估值", st["h1"]))
+    intro = _chapter_intro("股价估值")
+    if intro:
+        story.append(Paragraph(intro, st["caption"]))
     if daily_df is not None and not daily_df.empty:
         story.append(_price_chart(daily_df, index_df, stock_name))
         story.append(Paragraph("图：近1年股价走势（灰色虚线为上证综指归一化对比）", st["caption"]))
@@ -1227,30 +1467,37 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
 
     # ── 四、业绩分析 ──
     story.append(Paragraph("四、业绩分析", st["h1"]))
+    intro = _chapter_intro("业绩分析")
+    if intro:
+        story.append(Paragraph(intro, st["caption"]))
     if income_df is not None and not income_df.empty and "income_df" in fin:
         story.append(_revenue_chart(fin["income_df"], stock_name))
         story.append(Paragraph("图：近5年营业收入与归母净利润（亿元）", st["caption"]))
 
+    # 可读性改进2：业绩表加信号灯 + 术语释义
     fin_rows = [
-        ["指标", "数值"],
-        ["近1年营收增速", f"{fin.get('rev_growth','N/A')}%"],
-        ["近1年净利润增速", f"{fin.get('profit_growth','N/A')}%"],
-        ["最新ROE", f"{fin.get('roe','N/A')}%"],
-        ["毛利率", f"{fin.get('gross_margin','N/A')}%"],
-        ["资产负债率", f"{fin.get('debt_ratio','N/A')}%"],
+        ["指标（释义）", "数值（信号灯）"],
+        [f"近1年营收增速（{_gloss('CAGR')}）", f"{_signal_text('rev_growth', fin.get('rev_growth'), '%')}"],
+        [f"近1年净利润增速（{_gloss('CAGR')}）", f"{_signal_text('profit_growth', fin.get('profit_growth'), '%')}"],
+        [f"最新ROE（{_gloss('ROE')}）", f"{_signal_text('roe', fin.get('roe'), '%')}"],
+        [f"毛利率（{_gloss('毛利率')}）", f"{_signal_text('gross_margin', fin.get('gross_margin'), '%')}"],
+        [f"资产负债率（{_gloss('资产负债率')}）", f"{_signal_text('debt', fin.get('debt_ratio'), '%')}"],
     ]
     story.append(_tbl(fin_rows, col_widths=[6*cm, 6*cm]))
     story.append(Spacer(1, 0.3*cm))
 
     # ── 五、财务健康度 ──
     story.append(Paragraph("五、财务健康度", st["h1"]))
+    intro = _chapter_intro("财务健康")
+    if intro:
+        story.append(Paragraph(intro, st["caption"]))
     debt = fin.get("debt_ratio", None)
     roe  = fin.get("roe", None)
     health_notes = []
     if roe is not None:
-        health_notes.append(f"ROE {roe}%：{'优秀（>15%）' if roe > 15 else '一般（≤15%）'}")
+        health_notes.append(f"ROE {_signal_text('roe', roe, '%')}")
     if debt is not None:
-        health_notes.append(f"资产负债率 {debt}%：{'偏高（>70%）' if debt > 70 else '健康（≤70%）'}")
+        health_notes.append(f"资产负债率 {_signal_text('debt', debt, '%')}")
     for note in health_notes:
         story.append(Paragraph(f"• {note}", st["body"]))
     story.append(Spacer(1, 0.3*cm))
@@ -1258,17 +1505,21 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     # ── 五点五、现金流质量 ──
     if cf_quality and cf_quality.get("rows"):
         story.append(Paragraph("5.5 现金流质量", st["h2"]))
+        intro = _chapter_intro("现金流")
+        if intro:
+            story.append(Paragraph(intro, st["caption"]))
         story.append(Paragraph(
             f"综合评价：{cf_quality.get('quality_label','N/A')}（CFO/净利润比率越高，利润含金量越高）",
             st["body"]
         ))
-        cf_rows = [["年份", "经营现金流（亿）", "归母净利润（亿）", "CFO/净利润"]]
+        cf_rows = [[f"年份", "经营现金流（亿）", "归母净利润（亿）", f"CFO/净利润（{_gloss('CFO/净利比')}）"]]
         for r in cf_quality["rows"]:
+            ratio_signal = _signal_text("cfo_ratio", r["ratio"]) if r["ratio"] is not None else "N/A"
             cf_rows.append([
                 r["year"],
                 str(r["cfo_bn"]) if r["cfo_bn"] is not None else "N/A",
                 str(r["net_bn"]) if r["net_bn"] is not None else "N/A",
-                str(r["ratio"]) if r["ratio"] is not None else "N/A",
+                ratio_signal,
             ])
         story.append(_tbl(cf_rows, col_widths=[2.5*cm, 4*cm, 4*cm, 3.5*cm]))
         story.append(Spacer(1, 0.3*cm))
@@ -1276,12 +1527,15 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     # ── 5.6 ROE 杜邦分解（P0-3）──
     if dupont and dupont.get("rows"):
         story.append(Paragraph("5.6 ROE 杜邦分解", st["h2"]))
+        intro = _chapter_intro("杜邦")
+        if intro:
+            story.append(Paragraph(intro, st["caption"]))
         story.append(Paragraph(
-            f"ROE = 净利率 × 总资产周转率 × 权益乘数。驱动判断：{dupont.get('driver','N/A')}。"
+            f"ROE = 净利率({_gloss('净利率')}) × 总资产周转率({_gloss('总资产周转率')}) × 权益乘数({_gloss('权益乘数')})。驱动判断：{dupont.get('driver','N/A')}。"
             f"靠净利率的 ROE 含金量高，靠权益乘数（加杠杆）的 ROE 风险在累积。",
             st["body"]
         ))
-        dp_rows = [["年份", "净利率(%)", "总资产周转率", "权益乘数", "ROE(%)"]]
+        dp_rows = [[f"年份", f"净利率(%)({_gloss('净利率')})", f"总资产周转率({_gloss('总资产周转率')})", f"权益乘数({_gloss('权益乘数')})", f"ROE(%)({_gloss('ROE')})"]]
         for r in dupont["rows"]:
             dp_rows.append([str(x) for x in r])
         story.append(_tbl(dp_rows, col_widths=[2.5*cm, 3*cm, 3.5*cm, 3*cm, 2.5*cm]))
@@ -1290,6 +1544,9 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     # ── 五点八、资产负债质量 ──
     if bs_quality and bs_quality.get("rows"):
         story.append(Paragraph("5.8 资产负债质量", st["h2"]))
+        intro = _chapter_intro("资产负债")
+        if intro:
+            story.append(Paragraph(intro, st["caption"]))
         cr = bs_quality.get("current_ratio")
         qr = bs_quality.get("quick_ratio")
         if cr is not None:
@@ -1310,6 +1567,9 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     # ── 六、同行龙头与估值锚对比 ──
     if industry_comp:
         story.append(Paragraph("六、同行龙头与估值锚对比", st["h1"]))
+        intro = _chapter_intro("同行对比")
+        if intro:
+            story.append(Paragraph(intro, st["caption"]))
         story.append(Paragraph(
             f"行业：{industry_comp.get('industry','')}　同类股票数：{industry_comp.get('peer_count',0)} 只",
             st["body"]
@@ -1398,6 +1658,9 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     # ── 七、三情景分析 ──
     if scenario and scenario.get("cur_price"):
         story.append(Paragraph("七、三情景分析（未来1年）", st["h1"]))
+        intro = _chapter_intro("三情景")
+        if intro:
+            story.append(Paragraph(intro, st["caption"]))
         story.append(Paragraph(
             "基于历史 PE 区间与净利润增速区间，测算三种情景下的目标价格区间，仅供参考。",
             st["caption"]
@@ -1475,6 +1738,9 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
 
     # ── 九、资金面分析 ──
     story.append(Paragraph("九、资金面综合分析", st["h1"]))
+    intro = _chapter_intro("资金面")
+    if intro:
+        story.append(Paragraph(intro, st["caption"]))
     fund_items = []
 
     # 主力资金
@@ -1579,6 +1845,9 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
 
     # ── 十三、股东结构 ──
     story.append(Paragraph("十三、股东结构", st["h1"]))
+    intro = _chapter_intro("股东结构")
+    if intro:
+        story.append(Paragraph(intro, st["caption"]))
     if holders_df is not None and not holders_df.empty:
         holders_df2 = holders_df.sort_values("end_date", ascending=False)
         latest_date = holders_df2["end_date"].iloc[0]
@@ -1657,6 +1926,9 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     if reverse_dcf:
         story.append(PageBreak())
         story.append(Paragraph("十七、隐含预期推演（反向 DCF）", st["h1"]))
+        intro = _chapter_intro("反向DCF")
+        if intro:
+            story.append(Paragraph(intro, st["caption"]))
         story.append(Paragraph(
             "本节不预测股价，而是反推：当前市值定价了多少未来增长？隐含预期越高于历史增速，定价越乐观。",
             st["caption"]
@@ -1683,6 +1955,9 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     if monitor:
         story.append(PageBreak())
         story.append(Paragraph("十八、未来验证节点（监控清单）", st["h1"]))
+        intro = _chapter_intro("监控清单")
+        if intro:
+            story.append(Paragraph(intro, st["caption"]))
         story.append(Paragraph(
             "以下为规则化生成的跟踪框架：强化逻辑的事件与证伪逻辑的数据，用于持续验证研究结论。不构成买卖建议。",
             st["caption"]
@@ -1705,6 +1980,9 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     if business_engine:
         story.append(PageBreak())
         story.append(Paragraph("十九、赚钱机制与商业模式拆解", st["h1"]))
+        intro = _chapter_intro("赚钱机制")
+        if intro:
+            story.append(Paragraph(intro, st["caption"]))
         story.append(Paragraph(
             "本节从毛利率、净利率与资产周转拆解公司“靠什么赚钱”，区分产品溢价型与规模效率型。",
             st["caption"]
@@ -1736,6 +2014,9 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     if industry_cycle:
         story.append(PageBreak())
         story.append(Paragraph("二十、行业周期与格局判断", st["h1"]))
+        intro = _chapter_intro("行业周期")
+        if intro:
+            story.append(Paragraph(intro, st["caption"]))
         story.append(Paragraph(
             "基于同业截面估值与增长信号的轻量代理判断（缺行业历史PE序列与产能/Capex数据，仅为方向性参考）。",
             st["caption"]
@@ -1763,6 +2044,9 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     if bear_case:
         story.append(PageBreak())
         story.append(Paragraph("二十一、空方逻辑与风险推演", st["h1"]))
+        intro = _chapter_intro("空方逻辑")
+        if intro:
+            story.append(Paragraph(intro, st["caption"]))
         story.append(Paragraph(
             "对抗确认偏误：强制列出看空理由与黑天鹅场景。以下量化信号为规则化识别，"
             "偏空检索线索来自互联网研究（需以公告核实）。",
@@ -1791,6 +2075,9 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     if data_sources:
         story.append(PageBreak())
         story.append(Paragraph("二十二、数据来源与取数说明", st["h1"]))
+        intro = _chapter_intro("数据来源")
+        if intro:
+            story.append(Paragraph(intro, st["caption"]))
         story.append(Paragraph(
             "本报告为纯规则化、零 token 编排：所有指标由公开数据计算，未调用任何大模型。来源如下：",
             st["caption"]
