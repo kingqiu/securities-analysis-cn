@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """
-Minima AI research commentary module.
-调用 MiniMax-M2.7 模型，基于量化指标生成审慎的研究复盘文字。
+研究报告"模型文字解读"模块。
+
+默认【零 token 模式】：不调用任何外部大模型，直接输出基于量化指标的规则化研究解读，
+与本项目"零 token、不向用户索取密钥、不调用外部 LLM"的定位一致。
+
+如需启用 AI 润色，设置环境变量 TDX_AI_COMMENTARY=1（需平台/账号侧已配置可用的 LLM provider）。
+启用后调用 MiniMax-M2.7 生成审慎的研究复盘文字；任何异常或质检失败均自动降级为规则化解读。
 """
+
+import os
 
 from analyst_model import build_stock_research_view, render_stock_research_brief
 from etf_analyst_model import build_etf_research_view, render_etf_research_brief
@@ -362,6 +369,12 @@ def get_investment_advice(security_type: str, summary_data: dict) -> str:
     返回:
         str - 包含研究状态、理由和风险的自然语言解读
     """
+    # ── 零 token 模式（默认）──
+    # 不调用任何外部大模型，直接输出规则化研究解读，兑现"零 token / 不调外部 LLM"定位。
+    if os.environ.get("TDX_AI_COMMENTARY", "") != "1":
+        print("  AI 解读已禁用（零 token 模式），使用规则化研究解读")
+        return _fallback_advice(security_type, summary_data)
+
     print("  调用 Minima AI 生成研究解读...")
 
     if security_type == "etf":

@@ -426,11 +426,54 @@ securities-analysis-cn/
 
 其中 **12 已实现（2026-07-19）**；13 / 14 / 15 / 16 / 17 五项已在本文档 §14 展开为正式设计（含数据契约、函数签名、渲染方案、定位边界与可行性；15/16 的可行性标注为"中"，待 TDX 重连后实测接口/明细字段再落地实现）。
 
+### 12.8 ETF 引擎可读性层移植 + 零 token 收口（2026-07-20）
+
+> **背景**：P2-12 多视角速览与 §13 五项可读性改造此前只落在**股票引擎 `step4`**。ETF 引擎 `step3` 仍是无可读性层的旧版，且 `ai_analysis.py` 在报告流中会调用外部大模型（MiniMax-M2.7），与"零 token"定位矛盾。本次把可读性层移植到 `step3`，并让 AI 解读默认关闭，补齐 ETF 报告的可读性与零 token 闭环。
+
+**改动 A — ETF 引擎（`step3_generate_pdf_report.py`）移植股票引擎的可读性层**
+
+| 改造项 | ETF 实现 | 对应股票引擎 |
+|---|---|---|
+| 一页纸摘要 TL;DR | `_tldr_etf(s)` → 封面后新增「核心要点速览」页（5-6 条带信号灯大白话结论 + 一句话总结） | `_tldr()` |
+| 信号灯指标评分 | `SIGNAL_THRESHOLDS`（ETF 专属：`pe_pct`/`te`/`premium_abs`/`aum`/`fee`/`ret_y`/`top10_weight`）+ `_signal()` / `_signal_text()` | 同 |
+| 术语释义 | `GLOSSARY`（ETF 术语）+ `_gloss(term)` | 同 |
+| 章节白话导语 | `_chapter_intro_etf(key)` → 投资摘要/情景区间/业绩分析/持仓分析/同类对比/规模流动性/费率分析/风险提示 各章标题后一行"这节回答什么问题" | `_chapter_intro()` |
+| 封面 notes 大白话 | `_plain_summary_etf(s)` → 按各指标信号灯拼接一条综合大白话判断，替换原行话 notes | `_plain_summary()` |
+| 多视角速览（P2-12） | `_multi_perspective_etf(s)` → 新增「2.5、多视角速览」章（价值/成长/趋势/风险四视角一句话【判断】） | `_multi_perspective()` |
+
+- ETF 专属信号灯阈值：跟踪误差 `te`（<0.3% 优秀 / 0.3-0.8% 一般 / >0.8% 偏高）、溢价率绝对值 `premium_abs`（<0.3% 正常 / 0.3-1% 关注 / >1% 偏高）、规模 `aum`（>100亿 充足 / 10-100亿 一般 / <10亿 偏小）、费率 `fee`（<0.15% 低 / 0.15-0.5% 适中 / >0.5% 偏高）、近1年收益 `ret_y`（>20% 强 / 0-20% 中性 / <0% 负）、成分集中度 `top10_weight`（<40% 分散 / 40-60% 适中 / >60% 集中）。
+- `_signal_text` 已**加固**：指标为 `None`/缺失时返回空或 `数据缺失` 标签，**不再打印字面 `None`**（同步加固了 `step4` 的同名函数，两引擎行为一致）。
+
+**改动 B — `ai_analysis.py` 默认零 token 化（兑现定位）**
+
+- 模块默认【零 token 模式】：不调用任何外部大模型，直接输出基于量化指标的规则化研究解读，与"零 token、不索取密钥、不调外部 LLM"定位一致。
+- `get_investment_advice()` 在 `os.environ.get("TDX_AI_COMMENTARY","") != "1"` 时**提前返回** `_fallback_advice(security_type, summary_data)`（规则化模板），并打印 `AI 解读已禁用（零 token 模式），使用规则化研究解读`。
+- 仅在显式设置 `TDX_AI_COMMENTARY=1`（且平台/账号侧已配置可用 LLM provider）时才走外部模型润色，作为可选增强，不破坏 CLI 确定性。`providers.get_llm_provider()` 调用失败也 graceful 回退 `_FALLBACK`，不会 crash。
+
+**改动 C — ETF 收益本地计算兜底（`step3` `_calc_returns`）**
+
+- `_calc_returns(nav_df, price_df=None)`：NAV（AkShare）取数失败时，**回退到 TDX 落盘的价日线** `tdx_raw/<code>_daily.json` 计算区间收益。
+- 实测 588000 落盘仅 ~130 行：1M=9.11% / 3M=36.85% / 6M=34.49% 已可填充；1Y/2Y/3Y 需约 250/500/750 个交易日，落盘不足 → 显示「数据不足」（诚实降级，非 `None`）。
+- 调用点改为 `_calc_returns(nav_df, daily_df)`；`evidence_map` 中"近1年收益"改为预计算 `ret1y_str`（先取 `_ret1y` 再 f-string，修复嵌套 f-string 语法错误与 `None%` 显示 bug）。
+
+**验证结论（588000 科创50ETF，2026-07-20）**
+
+| 维度 | 结果 |
+|---|---|
+| PDF 页数 | 12 页 |
+| 字面 `None`（可见） | **0**（信号灯缺失统一显示 `数据缺失` / `N/A`） |
+| 核心要点速览页 | ✅ 生成 |
+| 2.5 多视角速览章 | ✅ 生成（四视角一句话【判断】） |
+| AI 外部调用 | **0**（默认零 token；运行日志打印禁用提示） |
+| 收益填充 | 1M/3M/6M 已填充；1Y/2Y/3Y 数据不足（诚实降级） |
+
+> 以上三处改动与 §13 股票引擎可读性层、§14.1 P2-12 多视角设计同构，仅指标与文案适配 ETF。改动文件：`step3_generate_pdf_report.py`、`ai_analysis.py`、`step4_generate_stock_pdf.py`（`_signal_text` 加固同步）；提交后 push 至 `feature/tdx-data-source`。
+
 ---
 
 ## 13. 可读性层设计（面向非专业用户，已落地并提交 `6c79bf0`）
 
-> **背景**：报告数值专业、术语密集，普通用户读不懂数值含义（ROE 7.3% 是好是坏？CFO/净利润比是什么？）。本层在**不引入 LLM、不改变数据层**的前提下，通过"信号灯 + 术语释义 + 一页纸摘要 + 章节导语 + 白话封面"把专业数据翻译成普通人能看懂的信号。全部为规则化（零 token），位于 `step4_generate_stock_pdf.py`。
+> **背景**：报告数值专业、术语密集，普通用户读不懂数值含义（ROE 7.3% 是好是坏？CFO/净利润比是什么？）。本层在**不引入 LLM、不改变数据层**的前提下，通过"信号灯 + 术语释义 + 一页纸摘要 + 章节导语 + 白话封面"把专业数据翻译成普通人能看懂的信号。全部为规则化（零 token），**最初位于 `step4_generate_stock_pdf.py`（股票引擎）**；2026-07-20 已**同构移植到 `step3_generate_pdf_report.py`（ETF 引擎）**（详见 §12.8），两引擎共用信号灯/术语表/章节导语/TD;DR/多视角设计，仅指标阈值与文案适配各自标的。
 
 ### 13.1 五项改进与实现位置
 

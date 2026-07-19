@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-步骤3：基于真实数据生成 ETF 深度分析 PDF 报告（含 Minima AI 研究解读）
+步骤3：基于真实数据生成 ETF 深度分析 PDF 报告。
+
+默认零 token：模型文字解读用规则化生成（ai_analysis 在 TDX_AI_COMMENTARY=1 时才调外部大模型）。
 """
 
 import json
@@ -131,20 +133,39 @@ def _load(json_file):
     return d
 
 
-def _calc_returns(nav_df):
-    if nav_df is None or nav_df.empty:
-        return {}
-    nav_df = nav_df.sort_values("nav_date").copy()
-    nav_df["unit_nav"] = pd.to_numeric(nav_df["unit_nav"], errors="coerce")
-    latest = nav_df["unit_nav"].iloc[-1]
-    result = {}
-    for label, days in [("1M", 21), ("3M", 63), ("6M", 126), ("1Y", 250), ("2Y", 500), ("3Y", 750)]:
-        if len(nav_df) > days:
-            past = nav_df["unit_nav"].iloc[-days]
-            result[label] = round((latest / past - 1) * 100, 2) if past else None
-        else:
-            result[label] = None
-    return result
+def _calc_returns(nav_df, price_df=None):
+    """基于单位净值(NAV)计算各期收益率；若 NAV 不可用，则退回用场内价日线(price_df)计算。
+    1Y/2Y/3Y 需要约 250/500/750 个交易日，TDX 落盘通常只有约 130 行，故长周期会返回 None（显示"数据不足"）。"""
+    if nav_df is not None and not nav_df.empty:
+        nav_df = nav_df.sort_values("nav_date").copy()
+        nav_df["unit_nav"] = pd.to_numeric(nav_df["unit_nav"], errors="coerce")
+        latest = nav_df["unit_nav"].iloc[-1]
+        result = {}
+        for label, days in [("1M", 21), ("3M", 63), ("6M", 126), ("1Y", 250), ("2Y", 500), ("3Y", 750)]:
+            if len(nav_df) > days:
+                past = nav_df["unit_nav"].iloc[-days]
+                result[label] = round((latest / past - 1) * 100, 2) if past else None
+            else:
+                result[label] = None
+        return result
+    # 退回：用场内价日线计算（市场价收益，含折溢价影响，作为 NAV 不可用时的代理）
+    if price_df is not None and not price_df.empty:
+        pdf = price_df.copy()
+        pdf["trade_date"] = pd.to_datetime(pdf["trade_date"]) if not pd.api.types.is_datetime64_any_dtype(pdf["trade_date"]) else pdf["trade_date"]
+        pdf = pdf.sort_values("trade_date")
+        pdf["close"] = pd.to_numeric(pdf["close"], errors="coerce").dropna()
+        if pdf.empty:
+            return {}
+        latest = pdf["close"].iloc[-1]
+        result = {}
+        for label, days in [("1M", 21), ("3M", 63), ("6M", 126), ("1Y", 250), ("2Y", 500), ("3Y", 750)]:
+            if len(pdf) > days:
+                past = pdf["close"].iloc[-days]
+                result[label] = round((latest / past - 1) * 100, 2) if past else None
+            else:
+                result[label] = None
+        return result
+    return {}
 
 
 def _calc_te(fund_df, index_df):
@@ -350,6 +371,258 @@ def _index_concentration(index_weight_df):
         "industry_weight_status": "当前数据源仅含成分代码和权重，缺少行业映射；本报告先用成分集中度替代行业权重风险观察",
     }
 
+# ── 可读性层（移植自股票引擎 step4，适配 ETF 指标）──────────────────────────────
+
+SIGNAL_THRESHOLDS = {
+    "pe_pct":      [(30, "●", "#1e8449", "偏低(<30%)"), (70, "●", "#BA7517", "适中(30-70%)"), (100, "●", "#c0392b", "偏高(>70%)")],
+    "te":          [(0.5, "●", "#1e8449", "优秀(<0.5%)"), (1.0, "●", "#BA7517", "良好(0.5-1%)"), (100, "●", "#c0392b", "偏差偏大(>1%)")],
+    "premium_abs": [(1.0, "●", "#1e8449", "接近平价(≤1%)"), (3.0, "●", "#BA7517", "温和偏离(1-3%)"), (100, "●", "#c0392b", "偏离较大(>3%)")],
+    "aum":         [(2, "●", "#c0392b", "偏小(<2亿,清盘风险)"), (20, "●", "#BA7517", "中等(2-20亿)"), (100000, "●", "#1e8449", "充裕(>20亿)")],
+    "fee":         [(0.3, "●", "#1e8449", "低(<0.3%)"), (0.6, "●", "#BA7517", "适中(0.3-0.6%)"), (100, "●", "#c0392b", "偏高(>0.6%)")],
+    "ret_y":       [(15, "●", "#1e8449", "强(>15%)"), (0, "●", "#BA7517", "正收益(0-15%)"), (-100, "●", "#c0392b", "负收益(<0%)")],
+    "top10_weight":[(40, "●", "#1e8449", "分散(<40%)"), (60, "●", "#BA7517", "集中(40-60%)"), (100, "●", "#c0392b", "高度集中(>60%)")],
+}
+
+
+def _signal(metric, value):
+    """返回 (emoji, color_hex, label) 信号灯三元组。value 可为 None/str/float。"""
+    if value is None or (isinstance(value, str) and value in ("N/A", "")):
+        return ("–", "#888888", "数据缺失")
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return ("–", "#888888", "数据缺失")
+    thresholds = SIGNAL_THRESHOLDS.get(metric)
+    if not thresholds:
+        return ("", "", "")
+    for boundary, emoji, color, label in thresholds:
+        if v >= boundary:
+            return (emoji, color, label)
+    return ("●", "#c0392b", "偏弱")
+
+
+def _signal_text(metric, value, suffix=""):
+    """生成带信号灯的 HTML 片段：值 + ● + 参考区间。用于 Paragraph / 表格单元格。"""
+    emoji, color, label = _signal(metric, value)
+    if value is None or value == "N/A" or value == "":
+        val_str = ""
+    else:
+        try:
+            v = float(value)
+            val_str = f"{v:.1f}{suffix}"
+        except (TypeError, ValueError):
+            val_str = str(value)
+    if not emoji:
+        return val_str if val_str else "N/A"
+    if not val_str:
+        return f'<font color="{color}">{emoji}</font> <font color="{color}">{label}</font>'
+    return f'<font color="{color}">{emoji}</font> {val_str} <font color="{color}">{label}</font>'
+
+
+GLOSSARY = {
+    "跟踪误差": "ETF 净值与跟踪指数涨跌幅的偏差年化标准差；越小说明跟踪越紧密",
+    "溢折率": "场内价格相对单位净值的偏离；溢价=价格高于净值，折价=低于净值",
+    "IOPV": "ETF 实时参考净值，由交易所盘中估算，用来判断折溢价",
+    "申购赎回": "授权参与人用一篮子股票与基金公司交换 ETF 份额的机制，使价格贴近净值",
+    "单位净值": "每份基金对应的资产净值，是 ETF 内在价值基准",
+    "基金规模": "ETF 总净资产（亿元）；过小有清盘风险，过大可能影响灵活性",
+    "综合费率": "管理费+托管费，每年从净值中扣除的成本",
+    "同类排名": "同赛道 ETF 中按收益等指标的相对位置",
+    "成分集中度": "前十大成分股权重合计，越高说明龙头股或单一行业波动影响越大",
+    "PE分位": "跟踪指数当前 PE 在历史中的相对位置，越低越便宜",
+    "定投": "定期定额买入，平滑择时风险",
+}
+
+
+def _gloss(term):
+    return GLOSSARY.get(term, term)
+
+
+def _to_num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _tldr_etf(s):
+    """可读性改进1：核心要点速览（TL;DR）—— 带信号灯的大白话结论。返回 list[str]。"""
+    items = []
+    # 1. 指数估值
+    ip = _to_num(s.get("index_pe_pct"))
+    e, c, l = _signal("pe_pct", ip)
+    items.append(
+        f'1. <b>指数估值：</b>跟踪指数 PE 分位 {_gloss("PE分位")} 当前 {s.get("index_pe_pct","N/A")}% '
+        f'<font color="{c}">{e} {l}</font>'
+    )
+    # 2. 跟踪误差
+    te = _to_num(s.get("tracking_error"))
+    e, c, l = _signal("te", te)
+    items.append(
+        f'2. <b>跟踪质量：</b>年化跟踪误差 {_gloss("跟踪误差")} {s.get("tracking_error","N/A")}% '
+        f'<font color="{c}">{e} {l}</font>'
+    )
+    # 3. 折溢价
+    prem = _to_num(s.get("premium"))
+    e, c, l = _signal("premium_abs", abs(prem) if prem is not None else None)
+    plabel = "溢价" if (prem or 0) > 0 else ("折价" if (prem or 0) < 0 else "平价")
+    items.append(
+        f'3. <b>折溢价：</b>{_gloss("溢折率")} 当前 {s.get("premium","N/A")}%（{plabel}） '
+        f'<font color="{c}">{e} {l}</font>'
+    )
+    # 4. 费率
+    fee = _to_num(s.get("total_fee"))
+    e, c, l = _signal("fee", fee)
+    items.append(
+        f'4. <b>成本：</b>综合费率 {_gloss("综合费率")} {s.get("total_fee","N/A")}%/年 '
+        f'<font color="{c}">{e} {l}</font>'
+    )
+    # 5. 规模
+    aum = _to_num(s.get("aum"))
+    e, c, l = _signal("aum", aum)
+    items.append(
+        f'5. <b>规模流动性：</b>基金规模 {_gloss("基金规模")} {s.get("aum","N/A")}亿元 '
+        f'<font color="{c}">{e} {l}</font>'
+    )
+    # 6. 近1年收益
+    ry = _to_num(s.get("ret_1y"))
+    if ry is not None:
+        e, c, l = _signal("ret_y", ry)
+        items.append(f'6. <b>近1年收益：</b>{s.get("ret_1y")}% <font color="{c}">{e} {l}</font>')
+    # 7. 资金面
+    items.append(f'7. <b>资金面：</b>近20日份额趋势 {s.get("flow_trend","未知")}（{s.get("net_flow_20d","N/A")}万份）')
+    # 一句话
+    parts = []
+    if ip is not None:
+        parts.append("指数" + ("不贵" if ip < 40 else "偏贵" if ip > 70 else "估值适中"))
+    if te is not None:
+        parts.append("跟踪" + ("紧密" if te < 1 else "偏差偏大"))
+    if fee is not None:
+        parts.append("成本" + ("低" if fee < 0.3 else "适中" if fee < 0.6 else "偏高"))
+    if parts:
+        items.append(f'<b>一句话：</b>{s.get("name","该ETF")}当前{", ".join(parts)}，需跟踪指数估值与折溢价变化。')
+    return items
+
+
+def _plain_summary_etf(s):
+    """可读性改进5：封面 notes 大白话化。"""
+    ip = _to_num(s.get("index_pe_pct"))
+    te = _to_num(s.get("tracking_error"))
+    fee = _to_num(s.get("total_fee"))
+    prem = _to_num(s.get("premium"))
+    parts = []
+    if ip is not None:
+        if ip < 30:
+            parts.append("指数估值偏低，配置性价比好")
+        elif ip < 70:
+            parts.append("指数估值适中")
+        else:
+            parts.append("指数估值偏高，注意回调")
+    if te is not None:
+        parts.append("跟踪紧密" if te < 1 else "跟踪偏差偏大")
+    if fee is not None:
+        parts.append("费率低" if fee < 0.3 else "费率适中" if fee < 0.6 else "费率偏高")
+    if prem is not None and abs(prem) > 3:
+        parts.append("当前溢价偏高，注意价格容错")
+    summary = "、".join(parts) if parts else "核心指标需进一步跟踪验证"
+    return f"{s.get('name','该ETF')}当前{summary}。"
+
+
+def _chapter_intro_etf(chapter_key):
+    """可读性改进4：章节白话导语 —— 每个章节开头一句"这节回答什么问题"。"""
+    INTROS = {
+        "投资摘要": "这节回答：这只 ETF 是什么？费率、规模、跟踪误差这些基本盘如何？",
+        "情景区间": "这节回答：基于指数估值和跟踪质量，当前处于什么配置状态？用于观察，不构成买卖建议。",
+        "业绩分析": "这节回答：这只 ETF 过去各周期收益如何？跟踪误差有多大？",
+        "持仓分析": "这节回答：ETF 把钱配在了哪些股票上？成分集中度如何？",
+        "基金经理": "这节回答：谁在管理这只基金？任职是否稳定？",
+        "同类对比": "这节回答：和同赛道其他 ETF 比，这只收益、费率、风险处于什么水平？",
+        "规模流动性": "这节回答：基金规模多大？资金在净申购还是净赎回？流动性够不够？",
+        "费率分析": "这节回答：持有这只 ETF 每年要付出多少成本？",
+        "指数估值": "这节回答：它跟踪的指数现在贵不贵？历史分位在哪？",
+        "溢折价": "这节回答：场内价格和净值差多少？高溢价买入要承担什么风险？",
+        "风险提示": "这节回答：投资这只 ETF 可能遇到哪些风险？",
+        "多视角速览": "这节回答：如果用价值、成长、趋势、风险四种视角看这只 ETF，各自关注什么、分歧在哪？",
+    }
+    return INTROS.get(chapter_key, "")
+
+
+def _multi_perspective_etf(s):
+    """P2-12 多视角速览（ETF 版）：四种视角一句话观察，纯规则零新增取数。返回 [{lens, focus, view, bulb}]。"""
+    items = []
+    ip = _to_num(s.get("index_pe_pct"))
+    te = _to_num(s.get("tracking_error"))
+    prem = _to_num(s.get("premium"))
+    fee = _to_num(s.get("total_fee"))
+    aum = _to_num(s.get("aum"))
+    ry = _to_num(s.get("ret_1y"))
+    flow = s.get("flow_trend", "未知")
+
+    # 1. 价值派
+    if ip is not None and ip < 30:
+        vp_view, vp_bulb = "跟踪指数估值处于历史偏低区间，配置性价比相对好；", '<font color="#2e7d32">●</font>'
+    elif ip is not None and ip > 70:
+        vp_view, vp_bulb = "跟踪指数估值偏高，安全边际不足，回撤风险较大。", '<font color="#c62828">●</font>'
+    else:
+        vp_view, vp_bulb = "跟踪指数估值中性，配置性价比一般。", '<font color="#f9a825">●</font>'
+    vp_facts = []
+    if ip is not None:
+        vp_facts.append(f"指数PE分位{ip}%")
+    if fee is not None:
+        vp_facts.append(f"综合费率{fee}%/年")
+    if prem is not None:
+        vp_facts.append(f"溢折率{prem}%")
+    items.append({"lens": "价值派", "focus": "指数估值分位 + 费率 + 折溢价",
+                  "view": f"【判断】{vp_view}（{('，'.join(vp_facts)) or '数据不足'}）", "bulb": vp_bulb})
+
+    # 2. 成长派（赛道景气度）
+    if ry is not None and ry > 15:
+        gp_view, gp_bulb = "近1年收益较强，赛道景气度高；注意高收益后的均值回归。", '<font color="#2e7d32">●</font>'
+    elif ry is not None and ry > 0:
+        gp_view, gp_bulb = "近1年正收益，赛道平稳；关注指数盈利趋势。", '<font color="#f9a825">●</font>'
+    elif ry is not None:
+        gp_view, gp_bulb = "近1年收益承压，赛道景气偏弱。", '<font color="#c62828">●</font>'
+    else:
+        gp_view, gp_bulb = "近1年收益数据不足（价日线不足1年），无法直接判断赛道强弱。", '<font color="#f9a825">●</font>'
+    gp_facts = []
+    if ry is not None:
+        gp_facts.append(f"近1年收益{ry}%")
+    if aum is not None:
+        gp_facts.append(f"规模{aum}亿")
+    items.append({"lens": "成长派", "focus": "近1年收益 + 规模趋势",
+                  "view": f"【判断】{gp_view}（{('，'.join(gp_facts)) or '数据不足'}）", "bulb": gp_bulb})
+
+    # 3. 趋势派
+    if flow == "净申购":
+        tp_view, tp_bulb = "近20日份额净申购，资金面偏强，短期配置热度改善。", '<font color="#2e7d32">●</font>'
+    elif flow == "净赎回":
+        tp_view, tp_bulb = "近20日份额净赎回，资金面偏弱，需警惕流动性下降。", '<font color="#c62828">●</font>'
+    else:
+        tp_view, tp_bulb = "资金面趋势未知，短期信号中性。", '<font color="#f9a825">●</font>'
+    tp_facts = [f"份额趋势{flow}", f"20日{s.get('net_flow_20d','N/A')}万份"]
+    items.append({"lens": "趋势派", "focus": "资金申赎 + 价格动能",
+                  "view": f"【判断】{tp_view}（{('，'.join(tp_facts))}）", "bulb": tp_bulb})
+
+    # 4. 风险派
+    risks = []
+    if te is not None and te > 1:
+        risks.append(f"跟踪误差偏大({te}%)")
+    if prem is not None and prem > 3:
+        risks.append(f"高溢价({prem}%)价格容错低")
+    if aum is not None and aum < 2:
+        risks.append(f"规模偏小({aum}亿)清盘风险")
+    if risks:
+        rp_view = "存在需重点跟踪的风险：" + "；".join(risks) + "。"
+        rp_bulb = '<font color="#c62828">●</font>'
+    else:
+        rp_view = "未检出显著量化风险信号，但指数系统性下跌与跟踪偏差扩大仍需持续跟踪。"
+        rp_bulb = '<font color="#2e7d32">●</font>'
+    items.append({"lens": "风险派", "focus": "跟踪误差 + 折溢价 + 规模",
+                  "view": f"【判断】{rp_view}", "bulb": rp_bulb})
+
+    return items
+
+
 # ── 图表生成 ──────────────────────────────────────────────────────────────────
 
 def _nav_chart(nav_df, fund_name):
@@ -411,7 +684,7 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     index_weight_df = d.get("index_weight")
     realtime_quote = d.get("realtime_quote", {})
 
-    returns = _calc_returns(nav_df)
+    returns = _calc_returns(nav_df, daily_df)
     te      = _calc_te(daily_df, index_df)
     ma_pos  = _ma_position(nav_df)
     aum_trend = _aum_trend(share_df)
@@ -508,7 +781,7 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
             ["综合费率", f"{total_fee}%/年", f"规模 {aum_bn}亿元"],
         ],
         notes=[
-            ["核心结论", f"综合费率{total_fee}%/年、规模{aum_bn}亿元；跟踪误差{etf_summary.get('tracking_error')}%，配置价值取决于指数估值与流动性。"],
+            ["核心结论", _plain_summary_etf(etf_summary)],
             ["关注变量", "指数估值、跟踪误差、溢价折价、规模流动性、费率和份额变化。"],
             ["主要风险", "指数系统性下跌、跟踪偏差扩大、流动性下降及高溢价下的价格容错风险。"],
         ],
@@ -516,8 +789,32 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
 
     add_report_reading_guide(story, kind="etf")
 
+    # ── 可读性改进1：核心要点速览（TL;DR）──
+    tldr_items = _tldr_etf(etf_summary)
+    if tldr_items:
+        story.append(PageBreak())
+        story.append(Paragraph("核心要点速览", st["h1"]))
+        story.append(Paragraph(
+            "以下为报告核心指标的大白话总结，每个指标带信号灯（●绿色=优 / ●黄色=中 / ●红色=劣）和参考区间，帮助快速理解「这个数意味着什么」。详细数据见后续各章节。",
+            st["caption"]
+        ))
+        story.append(Spacer(1, 0.3*cm))
+        for item in tldr_items:
+            story.append(Paragraph(item, st["body"]))
+        story.append(Spacer(1, 0.3*cm))
+
+    # 标注约定
+    story.append(Paragraph(
+        "标注约定：本报告以【事实】标注可验证的公开数据，【判断】标注基于规则的分析推论，"
+        "【情景】标注假设性风险场景。所有结论仅供研究复盘，不构成任何投资建议。",
+        st["caption"]
+    ))
+
     # ── 一、投资摘要 ──
     story.append(Paragraph("一、投资摘要", st["h1"]))
+    intro = _chapter_intro_etf("投资摘要")
+    if intro:
+        story.append(Paragraph(intro, st["caption"]))
     info_rows = [
         ["基金名称", fund_name, "基金代码", d["ts_code"]],
         ["基金类型", basic.get("fund_type",""), "成立日期", basic.get("found_date","")],
@@ -535,10 +832,12 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     ], kind="etf"))
     story.append(Spacer(1, 0.3*cm))
 
+    _ret1y = returns.get("1Y")
+    ret1y_str = f"{_ret1y:.2f}%" if _ret1y is not None else "数据不足"
     evidence_map(story, [
         [
             "跟踪指数是否具备配置价值",
-            f"指数估值分位 {index_val.get('pe_percentile','N/A') if index_val else 'N/A'}；近1年收益 {returns.get('1Y','N/A')}%",
+            f"指数估值分位 {index_val.get('pe_percentile','N/A') if index_val else 'N/A'}；近1年收益 {ret1y_str}",
             "中等",
             "指数估值能提供配置参照，但仍需结合行业结构和成分集中度理解。",
             "指数盈利、行业权重、宏观周期位置",
@@ -595,6 +894,9 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
 
     # ── 二、情景区间与观察触发器 ──
     story.append(Paragraph("二、情景区间与观察触发器", st["h1"]))
+    intro = _chapter_intro_etf("情景区间")
+    if intro:
+        story.append(Paragraph(intro, st["caption"]))
     story.append(callout_box("本节仅把 ETF 配置模型结果整理为配置情景、风险复核项和观察触发器，重点关注指数估值、跟踪质量、规模流动性、费率和溢价折价；不构成任何投资建议。", kind="etf"))
     story.append(Spacer(1, 0.2*cm))
     plan_rows = [
@@ -610,10 +912,10 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
 
     pro_rows = [
         ["专业维度", "当前读数", "解读"],
-        ["跟踪误差", f"{etf_summary.get('tracking_error')}% / 日均偏差{etf_summary.get('tracking_bias')}%", "越低说明跟踪指数越稳定，持续偏差需复核现金拖累、费用和复制误差"],
-        ["溢价/折价", f"{etf_summary.get('premium')}%（分位{etf_summary.get('premium_pct')}%）", "高溢价说明场内价格容错较低，折价需结合流动性和申赎机制判断"],
+        ["跟踪误差", _signal_text("te", etf_summary.get("tracking_error")) + f" / 日均偏差{etf_summary.get('tracking_bias')}%", "越低说明跟踪指数越稳定，持续偏差需复核现金拖累、费用和复制误差"],
+        ["溢价/折价", _signal_text("premium_abs", abs(_to_num(etf_summary.get("premium"))) if etf_summary.get("premium") not in (None, "N/A") else None) + f"（分位{etf_summary.get('premium_pct')}%）", "高溢价说明场内价格容错较低，折价需结合流动性和申赎机制判断"],
         ["份额变化", f"20日{etf_summary.get('net_flow_20d')}万份；60日{etf_summary.get('net_flow_60d')}万份", "份额扩张代表资金配置热度改善，持续赎回需警惕流动性下降"],
-        ["成分集中度", f"Top10 {etf_summary.get('top10_weight')}%；Top20 {etf_summary.get('top20_weight')}%", "集中度越高，龙头股或单一行业波动对ETF影响越大"],
+        ["成分集中度", _signal_text("top10_weight", etf_summary.get("top10_weight")) + f"；Top20 {etf_summary.get('top20_weight')}%", "集中度越高，龙头股或单一行业波动对ETF影响越大"],
         ["行业权重", etf_summary.get("industry_weight_status"), "后续可接入成分股行业映射后输出行业暴露矩阵"],
         ["策略适配", f"定投{etf_view.get('strategy_fit', {}).get('定投')}；波段{etf_view.get('strategy_fit', {}).get('波段')}；资产配置{etf_view.get('strategy_fit', {}).get('资产配置')}", "不同研究目的对应不同观察频率和反证条件"],
     ]
@@ -627,8 +929,28 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     story.extend(md_to_story(advice_text, st["body"], table_builder=_tbl))
     story.append(Spacer(1, 0.3*cm))
 
+    # ── 2.5、多视角速览（P2-12）──
+    story.append(Paragraph("2.5、多视角速览", st["h1"]))
+    intro = _chapter_intro_etf("多视角速览")
+    if intro:
+        story.append(Paragraph(intro, st["caption"]))
+    mp = _multi_perspective_etf(etf_summary)
+    if mp:
+        mp_rows = [["视角", "关注点", "一句话观点"]]
+        for it in mp:
+            mp_rows.append([
+                f'{it["bulb"]} {it["lens"]}',
+                it["focus"],
+                it["view"],
+            ])
+        story.append(_tbl(mp_rows, col_widths=[3*cm, 4.5*cm, 8.5*cm]))
+        story.append(Spacer(1, 0.2*cm))
+
     # ── 三、业绩分析 ──
     story.append(Paragraph("三、业绩分析", st["h1"]))
+    intro = _chapter_intro_etf("业绩分析")
+    if intro:
+        story.append(Paragraph(intro, st["caption"]))
     story.append(Paragraph("3.1 净值走势", st["h2"]))
     if nav_df is not None and not nav_df.empty:
         story.append(_nav_chart(nav_df, fund_name))
@@ -662,6 +984,9 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
 
     # ── 四、持仓分析 ──
     story.append(Paragraph("四、持仓分析", st["h1"]))
+    intro = _chapter_intro_etf("持仓分析")
+    if intro:
+        story.append(Paragraph(intro, st["caption"]))
     if portfolio_df is not None and not portfolio_df.empty:
         portfolio_df2 = portfolio_df.copy()
         portfolio_df2["stk_mkv_ratio"] = pd.to_numeric(portfolio_df2.get("stk_mkv_ratio", 0), errors="coerce")
@@ -702,6 +1027,9 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     # ── 五、同类基金对比 ──
     if similar_df is not None and not similar_df.empty:
         story.append(Paragraph("五、同类基金对比（业绩与风险）", st["h1"]))
+        intro = _chapter_intro_etf("同类对比")
+        if intro:
+            story.append(Paragraph(intro, st["caption"]))
         if similar_meta:
             story.append(Paragraph(
                 f"筛选方法：{similar_meta.get('method', '同赛道候选池')}；评分口径：{similar_meta.get('score_formula', '收益、费率、规模和风险综合评分')}",
@@ -756,6 +1084,9 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
 
     # ── 六、规模与流动性 ──
     story.append(Paragraph("六、规模与流动性", st["h1"]))
+    intro = _chapter_intro_etf("规模流动性")
+    if intro:
+        story.append(Paragraph(intro, st["caption"]))
     if share_df is not None and not share_df.empty:
         story.append(_aum_chart(share_df, fund_name))
         story.append(Paragraph("图：基金规模趋势（亿元）", st["caption"]))
@@ -774,6 +1105,9 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
 
     # ── 七、费率分析 ──
     story.append(Paragraph("七、费率分析", st["h1"]))
+    intro = _chapter_intro_etf("费率分析")
+    if intro:
+        story.append(Paragraph(intro, st["caption"]))
     fee_rows = [
         ["费用类型", "费率"],
         ["管理费", f"{m_fee}%/年"],
@@ -789,9 +1123,9 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         val_rows = [
             ["指标", "当前值", "历史分位（越低越便宜）"],
             ["市盈率 PE", str(index_val.get("current_pe", "N/A")),
-             f"{index_val.get('pe_percentile','N/A')}%" if index_val.get('pe_percentile') is not None else "N/A"],
+             _signal_text("pe_pct", index_val.get("pe_percentile")) if index_val.get("pe_percentile") is not None else "N/A"],
             ["市净率 PB", str(index_val.get("current_pb", "N/A")),
-             f"{index_val.get('pb_percentile','N/A')}%" if index_val.get('pb_percentile') is not None else "N/A"],
+             _signal_text("pe_pct", index_val.get("pb_percentile")) if index_val.get("pb_percentile") is not None else "N/A"],
         ]
         story.append(_tbl(val_rows, col_widths=[4*cm, 3*cm, 5*cm]))
         story.append(Spacer(1, 0.2*cm))
@@ -802,7 +1136,7 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         prem_label = "溢价" if prem > 0 else "折价"
         prem_rows = [
             ["指标", "数值"],
-            ["当前溢折率", f"{prem:.2f}%（{prem_label}）"],
+            ["当前溢折率", f"{_signal_text('premium_abs', abs(prem))}（{prem_label}）"],
             ["历史分位", f"{premium_disc.get('premium_percentile','N/A')}%"],
             ["近1年最高溢价", f"{premium_disc.get('max_premium','N/A')}%"],
             ["近1年最低折价", f"{premium_disc.get('min_premium','N/A')}%"],
@@ -813,6 +1147,9 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
 
     # ── 八、风险提示 ──
     story.append(Paragraph("八、风险提示", st["h1"]))
+    intro = _chapter_intro_etf("风险提示")
+    if intro:
+        story.append(Paragraph(intro, st["caption"]))
     risks = [
         "本报告基于历史数据，不代表未来表现，市场有风险，投资需谨慎。",
         "ETF 被动跟踪指数，指数下跌时基金净值同步下跌，无法规避系统性风险。",

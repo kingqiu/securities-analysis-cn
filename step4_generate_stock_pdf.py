@@ -116,13 +116,18 @@ def _signal(metric, value):
 def _signal_text(metric, value, suffix=""):
     """生成带信号灯的 HTML 片段：值 + emoji + 参考区间。用于 Paragraph。"""
     emoji, color, label = _signal(metric, value)
-    try:
-        v = float(value) if value is not None and str(value) != "N/A" else None
-        val_str = f"{v:.1f}{suffix}" if v is not None else str(value)
-    except (TypeError, ValueError):
-        val_str = str(value)
+    if value is None or value == "N/A" or value == "":
+        val_str = ""
+    else:
+        try:
+            v = float(value)
+            val_str = f"{v:.1f}{suffix}"
+        except (TypeError, ValueError):
+            val_str = str(value)
     if not emoji:
-        return val_str
+        return val_str if val_str else "N/A"
+    if not val_str:
+        return f'<font color="{color}">{emoji}</font> <font color="{color}">{label}</font>'
     return f'<font color="{color}">{emoji}</font> {val_str} <font color="{color}">{label}</font>'
 
 
