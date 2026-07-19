@@ -25,7 +25,10 @@
 > ```
 > **认证方式：服务端 / 平台托管认证——配置中不含任何 API Key / Token。** 鉴权由 WorkBuddy 平台在账号层面完成。
 
-### 路径 A：同一 WorkBuddy 平台（推荐，最可靠）
+### 路径 A：同一 WorkBuddy 平台（本项目不适用——已确认新 Agent 跨平台）
+
+> 仅作完整性保留：若未来在同一 WorkBuddy 账号下运行，可在 connector 面板启用 `connector:tdx-connector`。
+> 本项目当前场景为新 Agent 跨平台，故实际只能走路径 B。
 
 1. 打开你的 connector / MCP 管理面板（与 Feishu / Lark 等连接器同处）。
 2. 找到并启用「通达信 / TDX」连接器（server 名 `connector:tdx-connector`）。
@@ -35,9 +38,13 @@
    - `tdxf10_*` 系列（`tdxf10_gg_gdyj` / `tdxf10_gg_jyds` / `tdxf10_gg_fhrz` 等）
 4. 若面板里**看不到**该连接器，说明当前账号尚未获得 TDX 连接器授权——需先在账号侧开通，无法仅靠粘贴 URL 解决（见路径 B 注意）。
 
-### 路径 B：跨平台 / 直接挂载远程 URL（仅同账号/同授权平台时有效）
+### 路径 B：跨平台 / 直接挂载远程 URL（必须提供平台托管认证的 token）
 
-若你的运行时支持直接挂载 `streamable-http` 类型 MCP，可在你的 `mcp.json` 的 `mcpServers` 下加入：
+> 本项目已确认：**新 Agent 不在同一 WorkBuddy 平台**，因此路径 A 不可用，只能走路径 B。
+> 但路径 B 要能联通，必须解决认证——见下方说明。
+
+TDX MCP 是远程 `streamable-http` 服务（server 名 `connector:tdx-connector`）。
+先**尝试无 token 直连**（部分内部端点可能放行）；若返回 401，则必须带上平台托管的 token：
 
 ```json
 {
@@ -45,17 +52,29 @@
     "connector:tdx-connector": {
       "url": "https://txmcp.tdx.com.cn:3001/txmcp",
       "type": "streamable-http",
-      "timeout": 30000
+      "timeout": 30000,
+      "headers": {
+        "Authorization": "Bearer <由项目方提供的 TDX token>"
+      }
     }
   }
 }
 ```
 
-> ⚠️ **重要限制**：因 TDX MCP 采用**平台托管认证**（配置里无密钥，鉴权由平台账号完成），
-> 仅把上面的 URL 粘贴到**未授权**的账号/环境，服务端通常会返回 401 拒绝。
-> 因此路径 B 仅在「你的环境与本项目同属一个已开通 TDX 的 WorkBuddy 账号/平台」时才有效。
-> 若你在不通的账号下，请走路径 A 先在该账号开通连接器授权。
-> 填好后**重启会话**让 MCP 工具加载。
+**为什么需要 token**：TDX MCP 采用**平台托管认证**——参考环境的主 `mcp.json` 里没有密钥，
+鉴权所需的 token 由 WorkBuddy 平台在账号侧持有并注入。因此**跨平台的新 Agent 必须拿到这个 token**
+才能通过服务端校验，光贴 URL 不够。
+
+**如何拿到 token（由项目方操作，勿猜测）**：在本机参考环境的
+`~/.workbuddy/connectors/<id>/.credentials.v3.json` 中存有平台托管的凭据；项目方打开后把对应 token
+填到上面 `Authorization` 的 `<...>` 处（具体 header 名/格式以实际凭据为准，可能是 `Authorization: Bearer`
+或自定义 header）。**token 与账号绑定、可能过期**，请勿提交进仓库。
+
+填好后**重启会话**让 MCP 工具加载，并用 Step 3 的冒烟测试验证。
+
+> 🛑 **拿不到 token 时的兜底（重要）**：若你（新 Agent）确实无法获得 TDX token，则**不要尝试运行任何报告**
+> （会 401 / 数据缺失）。你仍可安全完成「文档与代码结构的编辑类」任务；凡涉及运行 / 数据验证的环节，
+> 一律标注为「pending 用户本地验证」并交回给用户，由其在已授权环境验证。**绝不要为了跑通而伪造数据或编造指标。**
 
 ---
 
