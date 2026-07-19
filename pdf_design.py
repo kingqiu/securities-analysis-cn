@@ -210,7 +210,27 @@ def styled_table(data, col_widths=None, kind="stock", compact=False, numeric_col
     theme = theme_for(kind)
     font_size = 8.2 if compact else 8.7
     pad_y = 3 if compact else 5
-    table = Table(data, colWidths=col_widths, repeatRows=1)
+
+    # 自动将含 HTML 标记的单元格包装为 Paragraph（否则 <font> 等标签会原样显示）
+    body_style = ParagraphStyle(
+        name=f"_tbl_body_{kind}", fontName=CN_FONT,
+        fontSize=font_size, leading=font_size + 3,
+        alignment=0,  # LEFT; 表格内 ALIGN 由 TableStyle 控制
+        wordWrap="CJK",
+    )
+    wrapped_data = []
+    for ri, row in enumerate(data):
+        wr = []
+        for ci, cell in enumerate(row):
+            s = str(cell) if cell is not None else ""
+            # 含 < 则视为 XML 标记（如 <font>），需 Paragraph 解析；首行表头也用 Paragraph 保持一致
+            if "<" in s or ri == 0:
+                wr.append(Paragraph(s, body_style))
+            else:
+                wr.append(s)
+        wrapped_data.append(wr)
+
+    table = Table(wrapped_data, colWidths=col_widths, repeatRows=1)
     style = TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(theme["header"])),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor(theme["ink"])),

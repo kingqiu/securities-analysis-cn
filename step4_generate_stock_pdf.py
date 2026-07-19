@@ -285,6 +285,7 @@ def _chapter_intro(chapter_key):
         "反向DCF": "这节回答：不预测股价，而是反推：当前市值定价了多少未来增长？预期是否透支？",
         "监控清单": "这节回答：未来需要跟踪哪些关键事件和数据？什么信号会强化或证伪当前判断？",
         "数据来源": "这节回答：这份报告的数据从哪来的？取数时间是什么？可信度如何？",
+        "多视角速览": "这节回答：如果用价值、成长、趋势、风险四种不同视角看这家公司，各自会关注什么、分歧又在哪里？",
     }
     return INTROS.get(chapter_key, "")
 
@@ -1096,6 +1097,110 @@ def _revenue_chart(income_df, stock_name):
 
 # ── 主函数 ────────────────────────────────────────────────────────────────────
 
+def _multi_perspective(val, fin, cf_quality, industry_cycle, bear_case, stock_summary):
+    """P2-12 多视角速览：四种常见投研视角对同一家公司的一句话观察（纯规则、零新增取数）。
+    所有观点均为【判断】，仅描述关注点与倾向性观察，不构成任何买卖建议。
+    返回 [{lens, focus, view, bulb}]，bulb 为带颜色的 ● HTML 片段。"""
+    items = []
+
+    def _bulb(metric, value):
+        emoji, color, _ = _signal(metric, value)
+        if not emoji or emoji == "–":
+            return '<font color="#888888">●</font>'
+        return f'<font color="{color}">{emoji}</font>'
+
+    pe_pct = val.get("pe_pct_3y") or val.get("pe_percentile")
+    roe = fin.get("roe")
+    cfo = cf_quality.get("latest_ratio") if cf_quality else None
+    rev_g = fin.get("rev_growth")
+    profit_g = fin.get("profit_growth")
+    debt = fin.get("debt_ratio")
+    stage = industry_cycle.get("stage") if industry_cycle else None
+    bear = bear_case.get("bear", []) if bear_case else []
+    bear_count = len(bear) if isinstance(bear, list) else 0
+    net_mf = stock_summary.get("net_mf_20d") if stock_summary else None
+
+    # 1. 价值派
+    vp_facts = []
+    if pe_pct is not None:
+        vp_facts.append(f"PE近3年分位 {pe_pct}%")
+    if cfo is not None:
+        vp_facts.append(f"CFO/净利 {cfo}")
+    if roe is not None:
+        vp_facts.append(f"ROE {roe}%")
+    if pe_pct is not None and pe_pct < 30:
+        vp_view = "估值处于历史偏低区间，安全边际相对充分；" + (
+            "但利润含金量一般，需确认盈利质量。" if (cfo is not None and cfo < 1.0) else "盈利质量尚可。")
+        vp_bulb = '<font color="#2e7d32">●</font>'
+    elif pe_pct is not None and pe_pct > 70:
+        vp_view = "估值处于历史偏高区间，安全边际不足，回撤风险较大。"
+        vp_bulb = '<font color="#c62828">●</font>'
+    else:
+        vp_view = "估值处于历史中性区间，安全边际一般。"
+        vp_bulb = '<font color="#f9a825">●</font>'
+    items.append({"lens": "价值派", "focus": "估值分位 + 现金流质量",
+                  "view": f"【判断】{vp_view}（{('，'.join(vp_facts)) or '数据不足'}）", "bulb": vp_bulb})
+
+    # 2. 成长派
+    gp_facts = []
+    if rev_g is not None:
+        gp_facts.append(f"营收增速 {rev_g}%")
+    if profit_g is not None:
+        gp_facts.append(f"净利增速 {profit_g}%")
+    if stage:
+        gp_facts.append(f"行业周期：{stage}")
+    if (rev_g is not None and rev_g > 15) and (profit_g is not None and profit_g > 15):
+        gp_view = "营收与净利均高速增长，成长逻辑顺畅；需关注高增能否持续、基数抬高后的边际变化。"
+        gp_bulb = '<font color="#2e7d32">●</font>'
+    elif (rev_g is not None and rev_g > 0) and (profit_g is not None and profit_g > 0):
+        gp_view = "营收与净利保持正增长，成长稳健；关注增速斜率是否放缓。"
+        gp_bulb = '<font color="#f9a825">●</font>'
+    else:
+        gp_view = "营收或净利增速承压（转负或持平），成长逻辑面临证伪，需跟踪拐点。"
+        gp_bulb = '<font color="#c62828">●</font>'
+    items.append({"lens": "成长派", "focus": "营收/净利增速 + 行业周期",
+                  "view": f"【判断】{gp_view}（{('，'.join(gp_facts)) or '数据不足'}）", "bulb": gp_bulb})
+
+    # 3. 趋势派
+    tp_facts = []
+    if pe_pct is not None:
+        tp_facts.append(f"PE分位 {pe_pct}%")
+    if isinstance(net_mf, (int, float)):
+        tp_facts.append(f"近20日主力净流入 {net_mf}万元")
+    elif net_mf is not None and net_mf != "N/A":
+        tp_facts.append(f"近20日主力净流入 {net_mf}")
+    if isinstance(net_mf, (int, float)) and net_mf < 0:
+        tp_view = "近20日主力资金净流出，短期筹码面偏弱，价格动能承压。"
+        tp_bulb = '<font color="#c62828">●</font>'
+    elif isinstance(net_mf, (int, float)) and net_mf > 0:
+        tp_view = "近20日主力资金净流入，短期筹码面偏强，价格动能改善。"
+        tp_bulb = '<font color="#2e7d32">●</font>'
+    else:
+        tp_view = "资金面数据不足，短期趋势信号中性。"
+        tp_bulb = '<font color="#f9a825">●</font>'
+    items.append({"lens": "趋势派", "focus": "资金面 + 技术位",
+                  "view": f"【判断】{tp_view}（{('，'.join(tp_facts)) or '数据不足'}）", "bulb": tp_bulb})
+
+    # 4. 风险派
+    rp_facts = []
+    if debt is not None:
+        rp_facts.append(f"资产负债率 {debt}%")
+    rp_facts.append(f"检出看空信号 {bear_count} 条")
+    if bear_count == 0:
+        rp_view = "未检出显著量化空方信号，但宏观、行业与政策层面的系统性风险仍需持续跟踪。"
+        rp_bulb = '<font color="#2e7d32">●</font>'
+    elif bear_count <= 2:
+        rp_view = f"检出 {bear_count} 条量化看空信号，整体可控但需重点跟踪（如：{bear[0]}）。"
+        rp_bulb = '<font color="#f9a825">●</font>'
+    else:
+        rp_view = f"检出 {bear_count} 条量化看空信号，空方理由较多，需高度关注风险边际。"
+        rp_bulb = '<font color="#c62828">●</font>'
+    items.append({"lens": "风险派", "focus": "空方信号 + 负债/质押",
+                  "view": f"【判断】{rp_view}", "bulb": rp_bulb})
+
+    return items
+
+
 def create_stock_pdf(data_file: str, output_path: str) -> None:
     print("=" * 80)
     print("生成股票深度分析 PDF 报告")
@@ -1454,6 +1559,24 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
 
     story.extend(md_to_story(analyst_brief, st["body"], table_builder=_tbl))
     story.append(Spacer(1, 0.3*cm))
+
+    # ── 二点五、多视角速览（P2-12）──
+    multi = _multi_perspective(val, fin, cf_quality, industry_cycle, bear_case, stock_summary)
+    if multi:
+        story.append(Paragraph("2.5、多视角速览", st["h1"]))
+        intro = _chapter_intro("多视角速览")
+        if intro:
+            story.append(Paragraph(intro, st["caption"]))
+        story.append(callout_box(
+            "本节用价值、成长、趋势、风险四种常见投研视角，对同一家公司给出一句话观察，"
+            "用于暴露视角分歧；所有观点均为【判断】，仅描述关注点与倾向性观察，不构成任何买卖建议。",
+            kind="stock"))
+        story.append(Spacer(1, 0.2*cm))
+        mp_rows = [["视角", "关注点", "一句话观点（【判断】）"]]
+        for it in multi:
+            mp_rows.append([it["lens"], it["focus"], f"{it['bulb']} {it['view']}"])
+        story.append(_tbl(mp_rows, col_widths=[2.6*cm, 3.2*cm, 10.2*cm]))
+        story.append(Spacer(1, 0.3*cm))
 
     # ── 三、股价与估值 ──
     story.append(Paragraph("三、股价与估值", st["h1"]))
