@@ -227,8 +227,9 @@ def styled_table(data, col_widths=None, kind="stock", compact=False, numeric_col
                 wr.append(cell)
                 continue
             s = str(cell) if cell is not None else ""
-            # 含 < 则视为 XML 标记（如 <font>），需 Paragraph 解析；首行表头也用 Paragraph 保持一致
-            if "<" in s or ri == 0:
+            # 首行表头、含 XML 标记、或含 CJK / 长文本 → 包装为 Paragraph 以支持自动换行。
+            # 裸字符串在 ReportLab Table 中不换行，会导致长中文溢出/重叠。
+            if ri == 0 or "<" in s or len(s) > 15 or any("\u4e00" <= ch <= "\u9fff" for ch in s):
                 wr.append(Paragraph(s, body_style))
             else:
                 wr.append(s)

@@ -968,7 +968,7 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         ["溢价/折价", _signal_text("premium_abs", abs(_to_num(etf_summary.get("premium"))) if etf_summary.get("premium") not in (None, "N/A") else None) + f"（分位{_disp_pct(etf_summary.get('premium_pct'))}）", "高溢价说明场内价格容错较低，折价需结合流动性和申赎机制判断"],
         ["份额变化", f"20日{_fmt_wan(etf_summary.get('net_flow_20d','未获取'))}；60日{_fmt_wan(etf_summary.get('net_flow_60d','未获取'))}", "份额扩张代表资金配置热度改善，持续赎回需警惕流动性下降"],
         ["成分集中度", _signal_text("top10_weight", etf_summary.get("top10_weight")) + f"；Top20 {_fmt_pct(etf_summary.get('top20_weight'))}", "集中度越高，龙头股或单一行业波动对ETF影响越大"],
-        ["行业权重", etf_summary.get("industry_weight_status"), "后续可接入成分股行业映射后输出行业暴露矩阵"],
+        ["行业权重", "未获取（TDX 无成分股权重源）", "后续可接入成分股行业映射后输出行业暴露矩阵"],
         ["策略适配", f"定投{etf_view.get('strategy_fit', {}).get('定投')}；波段{etf_view.get('strategy_fit', {}).get('波段')}；资产配置{etf_view.get('strategy_fit', {}).get('资产配置')}", "不同研究目的对应不同观察频率和反证条件"],
     ]
     story.append(Paragraph("ETF专业诊断", st["h2"]))
