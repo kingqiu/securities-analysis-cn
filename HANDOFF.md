@@ -14,34 +14,48 @@
 本项目数据层**完全依赖**「通达信 MCP (TDX)」——一个零 token 的 A股 / ETF / 港股财务与行情数据源。
 **没有它，你无法运行或验证任何报告。** 你（新 Agent）当前很可能没有这个 MCP，请先配置。
 
-### 路径 A：你的环境有 connector / MCP 市场（最常见）
+> **TDX MCP 实际形态（已核实参考环境）**：它是一个**平台托管的远程 MCP 服务**（`streamable-http`），
+> 配置位于连接器目录（`~/.workbuddy/connectors/<id>/mcp.json`），server 名为 `connector:tdx-connector`：
+> ```json
+> "connector:tdx-connector": {
+>   "url": "https://txmcp.tdx.com.cn:3001/txmcp",
+>   "type": "streamable-http",
+>   "timeout": 30000
+> }
+> ```
+> **认证方式：服务端 / 平台托管认证——配置中不含任何 API Key / Token。** 鉴权由 WorkBuddy 平台在账号层面完成。
+
+### 路径 A：同一 WorkBuddy 平台（推荐，最可靠）
 
 1. 打开你的 connector / MCP 管理面板（与 Feishu / Lark 等连接器同处）。
-2. 找到并启用「通达信 / TDX」MCP 连接器（也可能叫 "TDX 行情" / "通达信数据"）。
+2. 找到并启用「通达信 / TDX」连接器（server 名 `connector:tdx-connector`）。
 3. 信任 / 激活它。启用后，以下工具必须可用：
    - `tdx_lookup_stock`、`tdx_kline`、`tdx_quotes`、`tdx_api_data`、`tdx_indicator_select`
    - `wenda_news_query`、`wenda_report_query`、`wenda_notice_query`、`wenda_macro_query`
    - `tdxf10_*` 系列（`tdxf10_gg_gdyj` / `tdxf10_gg_jyds` / `tdxf10_gg_fhrz` 等）
-4. 若市场里**没有**该连接器，走路径 B。
+4. 若面板里**看不到**该连接器，说明当前账号尚未获得 TDX 连接器授权——需先在账号侧开通，无法仅靠粘贴 URL 解决（见路径 B 注意）。
 
-### 路径 B：手动加入 MCP 配置（自托管 server 时）
+### 路径 B：跨平台 / 直接挂载远程 URL（仅同账号/同授权平台时有效）
 
-把下面这个 server 条目加进你的 MCP 配置文件（如 `~/.workbuddy/mcp.json` 的 `mcpServers` 下）：
+若你的运行时支持直接挂载 `streamable-http` 类型 MCP，可在你的 `mcp.json` 的 `mcpServers` 下加入：
 
 ```json
-"<TDX_SERVER_NAME>": {
-  "command": "<由项目方提供的 TDX command>",
-  "args": ["<args>"],
-  "env": { "<KEY>": "<VALUE>" }
+{
+  "mcpServers": {
+    "connector:tdx-connector": {
+      "url": "https://txmcp.tdx.com.cn:3001/txmcp",
+      "type": "streamable-http",
+      "timeout": 30000
+    }
+  }
 }
 ```
 
-> ⚠️ 上述 `command` / `args` / `env` / `url` / `headers` 的**真实取值必须向项目方索取**——
-> 不要猜测，也**不要**把任何密钥硬编码进仓库。填好后**重启会话**让 MCP 工具加载。
-
-> 环境备注：在参考环境（本仓库作者的工作站）中，`~/.workbuddy/mcp.json` 仅含 `obsidian-mcp-server`，
-> **无 TDX 条目**，说明 TDX 在该环境是**平台级 connector**而非自托管 server。因此对新 Agent 而言
-> 「路径 A」通常是正解；只有确认为自托管 server 时才需走路径 B。
+> ⚠️ **重要限制**：因 TDX MCP 采用**平台托管认证**（配置里无密钥，鉴权由平台账号完成），
+> 仅把上面的 URL 粘贴到**未授权**的账号/环境，服务端通常会返回 401 拒绝。
+> 因此路径 B 仅在「你的环境与本项目同属一个已开通 TDX 的 WorkBuddy 账号/平台」时才有效。
+> 若你在不通的账号下，请走路径 A 先在该账号开通连接器授权。
+> 填好后**重启会话**让 MCP 工具加载。
 
 ---
 
