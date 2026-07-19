@@ -4,12 +4,14 @@
 > 让「股基研究助手」skill 跑通 A股 / ETF / 港股 的研究复盘报告。
 >
 > **主数据源为通达信 MCP（TDX）**——已实测覆盖 skill 绝大多数数据，且为平台维护的结构化接口，比 AkShare 稳定。
-> AkShare 新浪日线用作 A股/ETF 行情兜底，yfinance 仅作港股日线备选。
+> 当前代码仍保留 AkShare / yfinance 行情兜底；它们是迁移期兼容路径，**不属于严格 TDX 快照模式**。严格模式下，报告只读取已落盘的 TDX 数据与本地计算结果（见 §2.1）。
 >
 > **状态（2026-07-18）**：本方案已落地实现，分支 `feature/tdx-data-source` 已提交并 push。
 > **P0（5 项）+ P1（6 项）全部完成并双标的验证通过（002294 / 600176），报告零 token、字面 None = 0。**
-> **可读性层（5 项）已落地于工作区（`step4` 改造，待提交）**，详见「§13 可读性层设计」。
+> **可读性层（5 项）已落地并提交（`6c79bf0`）**，详见「§13 可读性层设计」。
 > 本设计文档记录最终架构、报告结构与全部改进（P0 / P1 / 可读性）的实现状态；P2 探索项六项（12-17）的正式设计见「§14 P2 探索项正式设计」。
+
+> **“零 token”口径**：指报告 CLI 不调用外部 LLM / 推理模型，所有结论均由本地规则产生；不等同于“绝无网络 I/O”。但在本项目的**严格快照模式**中，CLI 也不得发起任何网络请求。TDX 取数和可选的 wenda 资料收集均须在编排阶段完成并落盘，CLI 只读快照。
 
 ---
 
@@ -62,7 +64,7 @@ TDX 实测通过项（真实调用，非推测）：
 
 ---
 
-## 2. 目标架构（已落地：fin 配置 + run_report 编排 + step4 引擎）
+## 2. 目标架构（当前兼容实现 + 严格快照目标）
 
 > **核心思路**：TDX 是 MCP 工具，由 WorkBuddy 在对话内调用，**不是** skill CLI 能 `import` 的 Python 库。
 > 因此取数由 WorkBuddy 编排，落盘为**每只标的一份 `fin_<code>.json` 配置 + `tdx_raw/<code>_research.json` 检索结果**；
@@ -75,18 +77,68 @@ TDX 实测通过项（真实调用，非推测）：
       wenda_report/news/notice/macro_query  ──→  fin_<code>.json  +  tdx_raw/<code>_research.json
 
 ② run_report.py <code> <stock|etf>  （零 token 复用引擎）
-      读 fin_<code>.json  →  用 AkShare 新浪源补日线/指数  →  本地计算 PE-TTM/分位/杜邦/反向DCF
+      读 fin_<code>.json  + TDX 行情快照  →  本地计算 PE-TTM/分位/杜邦/反向DCF
       →  组装 data 字典（严格匹配 step4 的 _load 契约）  →  写 temp_<code>_data.json
 
 ③ step4_generate_stock_pdf.create_stock_pdf(data_file, out_pdf)
       _load() 解析 → build_*_summary → analyst_model（规则化）→ 22 章 PDF
 
-   └─ 输出 PDF（零 token，无外部 LLM / 搜索调用）
+   └─ 输出 PDF（零 token；严格快照模式下无外部网络调用）
 ```
 
 **关键设计契约（列名级）**：`run_report.py` 组装的 `data` 字典，每个 DataFrame 必须满足 `step4` 的 `_load()` 期望的英列名（见 §3 契约表）。这是整个方案的硬约束——TDX 返中文列名，由编排层在 `fin_<code>.json` 阶段完成 reshape。
 
 **默认行为**：给出任意股票代码或名称，WorkBuddy 先 `tdx_lookup_stock` 解析，再生成**完整 22 章**报告（不要求用户按需点选章节）。
+
+### 2.1 运行模式、快照边界与兼容状态
+
+| 模式 | 数据取得方 | CLI 网络行为 | 可作出的定位声明 | 状态 |
+|---|---|---|---|---|
+| **严格快照（目标默认）** | 编排层用 TDX 取数并落盘 | 禁止 HTTP；只读 `fin_<code>.json` 与 `tdx_raw/` 快照 | “TDX 数据 + 本地规则化计算” | 设计待代码收口 |
+| 刷新快照 | 编排层显式调用 TDX 后写入新快照 | CLI 仍禁止 HTTP | 同上，并显示本次刷新时点 | 编排职责 |
+| 兼容兜底（迁移期） | 当前 `run_report.py` 可访问 AkShare / yfinance | 允许网络请求 | 仅可声明“零 LLM token”，不得称为 TDX-only / 可复现快照 | 当前实现，待逐步移除 |
+
+严格快照模式是跨平台交接和可复现验证的唯一验收模式。若缺少日线、指数或其他必要快照，报告必须按 §7 跳过受影响章节并说明数据状态；不得在未标识的情况下改由 AkShare / yfinance 拉取并混入同一份报告。
+
+### 2.2 `fin_<code>.json` 版本化数据契约（新增，向后兼容）
+
+`fin_<code>.json` 是编排层与 CLI 的正式交接物，不应再只是“若干数值的集合”。新快照在保留现有业务字段的同时，**必须**带以下元数据；旧快照缺少这些字段时，CLI 可兼容读取，但报告的数据来源章必须标 `N/A（旧版快照，时点/单位待确认）`。
+
+```json
+{
+  "schema_version": "1.0",
+  "security": {"code": "600519", "name": "示例", "market": "CN"},
+  "snapshot": {
+    "mode": "tdx_snapshot",
+    "created_at": "2026-07-19T10:00:00+08:00",
+    "content_sha256": "<快照内容哈希>"
+  },
+  "as_of": {
+    "market": "2026-07-18",
+    "financial": "2026-03-31",
+    "research": "2026-07-19"
+  },
+  "sources": [
+    {"dataset": "income", "provider": "TDX", "entry": "ph_agf10_cw_lyb",
+     "retrieved_at": "2026-07-19T10:00:00+08:00", "period_end": "2026-03-31",
+     "unit": "CNY", "status": "ok"}
+  ],
+  "quality": {"state": "partial", "missing": ["cashflow"], "warnings": []}
+}
+```
+
+- `schema_version`、`snapshot.mode`、`as_of`、`sources[].unit` 和 `sources[].status` 是新快照的必填字段；禁止把 token、请求 header、账号信息或未经脱敏的凭据写入快照。
+- `as_of` 按市场、财务和资料分开记录，报告不得把 `created_at` / PDF 生成时间当作数据截至日。
+- `sources[].status` 仅可为 `ok`、`empty`、`unavailable`、`invalid`；`empty` 表示成功查询且无记录，`unavailable` 表示未取到/接口不可用，二者不得混写。
+- `content_sha256` 用于复现和夹具校验；其计算范围与算法须在实现时固定，不能含生成时间或临时文件路径。
+
+### 2.3 财报期间、TTM 与单位规则（新增）
+
+估值和质量指标只能使用已声明期间、币种和单位的财务数据。编排层归一化的利润表 / 资产负债表 / 现金流量表每行至少应保留 `period_start`、`period_end`、`period_type`（`annual` / `quarterly` / `ytd`）、`currency`、`unit`、`consolidation_scope`；CLI 不直接根据原始中文行名或行序推断这些语义。
+
+- `ttm_net_profit` 仅可由同一合并口径的最近四个单季，或“本期累计 + 上年年报 − 上年同期累计”计算；不得以 `income[-1]` 直接替代 TTM。
+- 报表期、股本时点和市场价格必须可追溯。若任一口径不明、币种 / 单位不一致，`pe_ttm`、反向 DCF 和依赖它们的情景章节一律标 `N/A` / 跳过。
+- 多期比较必须明确同比、环比还是年化；季度累计值不可与单季值混排。所有单位换算在编排层完成，并在 `sources` 留痕。
 
 ---
 
@@ -176,13 +228,22 @@ ETF 日线+实时已验证；持仓/净值/指数估值需落实，缺失标 N/A
 
 ---
 
-## 7. 降级与缺失策略（含复审 P1 修正）
+## 7. 降级、预检与缺失策略（含复审 P1 修正）
 
-1. **字段级 `N/A`**：TDX 任一接口返回空/失败时写 `N/A`；模型 `_safe_float` 已容错。
-2. **计算替代**：个股日 PE、pe_percentile、industry_pe_pct、support/resistance、volatility_60d 全部本地计算。
-3. **港股不阻断**：港股 basic/财务可取即返回 dict；日K缺失只影响价格情景章节（修正原 `return None` → abort 的问题）。
-4. **章节级跳过**：审计/概念等弱源章节不渲染。
-5. **`check_env.py` provider 感知**：当 `DATA_PROVIDER≠tushare` 时跳过 Tushare token 检查，改为校验 TDX 连接器在线 + 包 + 字体 + 写权限。
+`N/A` 不是兜底异常处理的同义词。CLI 在组装报表前必须执行 `validate_fin_snapshot()`（设计函数名），逐模块返回 `ok` / `empty` / `unavailable` / `invalid`，并把原因带入“数据来源与取数说明”章；不得用宽泛 `except` 吞掉结构错误后继续输出可能失真的数值。
+
+| 数据组 | 最低要求 | 缺失时的安全行为 |
+|---|---|---|
+| 身份 | `code` + `name` + 市场 | 生成数据可用性说明页并停止 PDF 主体；不得猜测标的 |
+| 行情与估值 | 已声明时点的价格、股本、有效 TTM / 净资产 | 跳过 PE/PB、分位、反向 DCF、情景区间；其余事实章节可继续 |
+| 财务质量 | 收入、净利、资产负债、现金流各自独立且期间明确 | 对应子指标 N/A，不用其他期间数据填补 |
+| 资金 / 股东 / 分红 / 资料索引 | 各模块可选 | 章节跳过或标 N/A，并显示 `empty` 与 `unavailable` 的不同原因 |
+
+1. **字段级 `N/A`**：仅对可选字段使用；字段为 `empty`、`unavailable`、`invalid` 时报告文案必须不同。
+2. **计算替代**：个股日 PE、pe_percentile、industry_pe_pct、support/resistance、volatility_60d 全部本地计算，且必须先通过 §2.3 的口径校验。
+3. **港股不阻断**：港股 basic/财务可取即返回部分 dict；日K缺失只影响价格情景章节（修正原 `return None` → abort 的问题）。
+4. **章节级跳过**：审计/概念等弱源章节不渲染；不可把“章节未取数”描述为“没有风险 / 没有事件”。
+5. **`check_env.py` provider 感知**：当 `DATA_PROVIDER≠tushare` 时跳过 Tushare token 检查，改为校验快照完整性、包、字体与写权限；连接器在线校验仅属于刷新快照步骤，不属于严格快照 CLI。
 
 ---
 
@@ -194,9 +255,19 @@ ETF 日线+实时已验证；持仓/净值/指数估值需落实，缺失标 N/A
 4. **计算补全** ✅：个股日 PE-TTM、1年/3年 PE 分位、行业分位、技术位、杜邦、反向 DCF 全部本地计算。
 5. **写中间 JSON** ✅：`temp_<code>_data.json`，结构严格匹配 step4 的 `_load()`。
 6. **复用引擎** ✅：直接 `create_stock_pdf(data_file, out_pdf)` / `create_etf_pdf(...)` 生成 PDF。
-7. **搜索层** ✅：`web_research` 用 `wenda_*` 替代 Tavily（无需 Key），且**不调 LLM**、纯结构化组装。
+7. **资料索引层** ✅：`web_research` 用预先落盘的 TDX `wenda_*` 结果替代 Tavily，且**不调 LLM**、纯结构化组装。严格快照 CLI 不执行查询；其输出仅为资料索引，遵守 §8.1 的合规过滤。
 8. **`check_env.py`** ⏸：本分支未改此文件（运行期不依赖它，绕过了原 Tushare 闸门）。
 9. **港股日K** ⏸：港股路径未实现（TDX 不支持港股日K，yfinance 兜底待接）；当前已验证 A股 + ETF。
+
+---
+
+### 8.1 `web_research` / wenda 资料索引的合规边界（新增）
+
+`web_research` 是事实资料的索引，不是“机构建议”或对外部观点的背书。编排层仅可落盘并向 PDF 传递 `source_type`、`title`、`published_at`、`source_id_or_url`、`retrieved_at` 与事实型标签；不得传递或渲染评级、目标价、买卖 / 持有倾向、仓位、止损、荐股文案或其摘要。
+
+- 报告章节名称统一使用“资料索引与近期事件”，`analyst_views` 是兼容字段名，新增快照使用 `source_index`。
+- 渲染前执行禁止性措辞扫描；命中“买入、卖出、持有、增持、减持、推荐、回避、目标价、仓位、止损、评级”等词的标题或内容，不输出原文，改为“资料条目已因合规规则省略”，并保留来源类型与日期。
+- 资料索引只辅助核对事实，不参与规则模型打分、情景参数或任何行动导向结论。来源缺失时跳过本章，不以本地搜索、外部网页或 LLM 补全。
 
 ---
 
@@ -214,7 +285,9 @@ ETF 日线+实时已验证；持仓/净值/指数估值需落实，缺失标 N/A
 | 缺失容错 | 断 wenda（无 research 文件） | ✅ 报告仍生成，多维交叉验证章优雅跳过 |
 | 对比 PDF | 茅台 vs 五粮液 | ⏸ 未实现（非当前重点） |
 
-**验证结论**：A股（600519/002294/600176）与 ETF（588000）四条报告链路端到端跑通，全部零 token、字面 `None = 0`。
+后续以严格快照模式验收时，除上述历史结果外，必须新增：快照 schema / 哈希校验、`empty` 与 `unavailable` 文案区分、TTM 期间与单位错配夹具、缺少关键估值字段时情景章节跳过、同一快照重复生成内容一致性，以及资料索引禁止性措辞扫描。未经这些夹具验证，不得将“当前实现”标记为严格快照模式已完成。
+
+**验证结论**：A股（600519/002294/600176）与 ETF（588000）四条报告链路端到端跑通，全部零 LLM token、字面 `None = 0`。这些历史结果验证的是当前兼容实现；严格快照模式仍以本节新增夹具为准，尚未完成验收。
 
 ---
 
@@ -235,6 +308,7 @@ ETF 日线+实时已验证；持仓/净值/指数估值需落实，缺失标 N/A
 **通达信 MCP 已作为主数据源落地实现，覆盖 A股全量 + ETF 的研究复盘报告，优于 AkShare，且零 token。**
 集成方式为"WorkBuddy 编排 TDX 取数 → 落盘 `fin_<code>.json`/`tdx_raw/*_research.json` → `run_report.py` 组装列名契约字典 → 复用 `step4` 规则化引擎"，绕过 Tushare 取数层与 `identify_code_type`。
 两条缺口：个股 PE 历史（已用 close×总股本/TTM净利 计算解决）、港股日K（TDX 不支持，yfinance 兜底或标 N/A，港股路径尚未实现）。
+**严格快照状态**：当前实现仍有兼容兜底网络路径；在 §2.1 的严格快照模式完成代码收口与 §9 夹具验收前，不宣称 CLI 已实现 TDX-only 或完全可复现。
 **当前状态**：P0（5 项）+ P1（6 项）全部完成并验证（详见 §12）；P2 探索项见配套改进方案文档，逐项待评估定位兼容性。
 
 ---
@@ -342,6 +416,7 @@ securities-analysis-cn/
 4. **`check_env.py` 未改**：本分支运行期不依赖它，原 Tushare 闸门不影响；若需作为独立 skill 打包，仍需做 provider 感知改造。
 5. **ETF 持仓/净值**：588000 已验证可用；部分 ETF 的 `fund_open_fund_info_em`/`fund_portfolio_hold_em` 取数失败时优雅降级（B 兜底 N/A）。
 6. **可读性层已提交**：§13 的五项可读性改造已合入分支（commit `6c79bf0`），双标的复验通过（None=0、信号灯 `●` 各 22 个）；「财务健康度」小结 `health_notes` 已统一为 `_signal_text` 彩色 `●` 风格，风格不一致已消除。
+7. **严格快照模式待实现**：`run_report.py` 目前仍可能调用 AkShare / yfinance，且未执行 §2.2 的 schema / 时点 / 哈希预检；这些兼容路径在严格模式验收前必须改为显式关闭或仅由编排层刷新快照。
 
 ### 12.7 下一步（P2，逐项评估定位兼容性）
 
