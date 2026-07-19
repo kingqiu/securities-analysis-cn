@@ -841,9 +841,10 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     add_report_reading_guide(story, kind="etf")
 
     # ── 可读性改进1：核心要点速览（TL;DR）──
+    # 注意：add_report_reading_guide 已在末尾插入 PageBreak，这里不要再插，
+    # 否则两个连续分页符之间会留下一页空白（此前的第 3 页空白即由此产生）。
     tldr_items = _tldr_etf(etf_summary)
     if tldr_items:
-        story.append(PageBreak())
         story.append(Paragraph("核心要点速览", st["h1"]))
         story.append(Paragraph(
             "以下为报告核心指标的大白话总结，每个指标带信号灯（●绿色=优 / ●黄色=中 / ●红色=劣）和参考区间，帮助快速理解「这个数意味着什么」。详细数据见后续各章节。",
