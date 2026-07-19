@@ -32,7 +32,13 @@ from reportlab.pdfbase.ttfonts import TTFont
 
 from ai_analysis import get_investment_advice
 from config import md_to_rl, md_to_story
-from etf_analyst_model import build_etf_research_view, render_etf_research_brief
+from etf_analyst_model import (
+    build_etf_research_view,
+    render_etf_research_brief,
+    build_etf_monitor,
+    build_etf_business_model,
+    build_etf_bear_case,
+)
 from pdf_design import (
     CN_FONT as SHARED_CN_FONT,
     add_cover,
@@ -591,6 +597,9 @@ def _chapter_intro_etf(chapter_key):
         "溢折价": "这节回答：场内价格和净值差多少？高溢价买入要承担什么风险？",
         "风险提示": "这节回答：投资这只 ETF 可能遇到哪些风险？",
         "多视角速览": "这节回答：如果用价值、成长、趋势、风险四种视角看这只 ETF，各自关注什么、分歧在哪？",
+        "监控清单": "这节回答：哪些信号会强化或证伪当前结论？哪些时间节点必须跟踪？",
+        "赚钱机制": "这节回答：被动指数基金靠什么赚钱？持有成本每年损耗多少？",
+        "数据来源": "这节回答：报告里的数字分别来自哪里？哪些是真的、哪些暂时拿不到？",
     }
     return INTROS.get(chapter_key, "")
 
@@ -706,6 +715,67 @@ def _aum_chart(share_df, fund_name):
     fig.tight_layout()
     return _chart_to_image(fig)
 
+
+def _scenario_band_chart(index_dailybasic_df, current_pe, current_nav, fund_name):
+    """情景参考区间图（对标股票报告 §8 _trading_plan_chart）：把指数 PE 25/50/75 分位映射到净值区间带。零 token。"""
+    if index_dailybasic_df is None or not hasattr(index_dailybasic_df, "empty") or index_dailybasic_df.empty:
+        return None
+    if current_pe is None or current_pe <= 0 or current_nav is None:
+        return None
+    pe = pd.to_numeric(index_dailybasic_df["pe"], errors="coerce").dropna()
+    pe = pe[pe > 0]
+    if len(pe) < 10:
+        return None
+
+    pe_bear = float(np.percentile(pe, 25))
+    pe_base = float(np.percentile(pe, 50))
+    pe_bull = float(np.percentile(pe, 75))
+    nav_bear = round(current_nav * pe_bear / current_pe, 4)
+    nav_base = round(current_nav * pe_base / current_pe, 4)
+    nav_bull = round(current_nav * pe_bull / current_pe, 4)
+
+    values = [nav_bear, nav_base, nav_bull, current_nav]
+    low = min(values)
+    high = max(values)
+    pad = max((high - low) * 0.15, high * 0.03)
+    x_min = max(0, low - pad)
+    x_max = high + pad
+
+    fig, ax = plt.subplots(figsize=(10, 2.8))
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(0, 1)
+    ax.set_yticks([])
+    ax.set_xlabel("单位净值（元）")
+    ax.set_title(f"{fund_name} 情景参考区间（基于指数 PE 分位）", fontsize=12)
+
+    bands = [
+        ("估值安全边际观察区", (nav_bear, nav_base), "#d5f5e3", "#1e8449"),
+        ("中性观察区", (nav_base, nav_bull), "#fcf3cf", "#b7950b"),
+        ("高估值复核区", (nav_bull, high), "#fadbd8", "#922b21"),
+    ]
+    y = 0.46
+    h = 0.28
+    for label, (s, e), color, edge in bands:
+        ax.barh(y, e - s, left=s, height=h, color=color, edgecolor=edge, linewidth=1)
+        ax.text((s + e) / 2, y, label, ha="center", va="center", fontsize=9, color=edge)
+
+    markers = [
+        ("当前净值", current_nav, "#000000", 0.78),
+        ("谨慎价值(PE25%)", nav_bear, "#7f8c8d", 0.10),
+        ("中性价值(PE50%)", nav_base, "#8b1a1a", 0.90),
+        ("乐观价值(PE75%)", nav_bull, "#c0392b", 0.10),
+    ]
+    for label, value, color, text_y in markers:
+        ax.axvline(value, color=color, linestyle="-" if label == "当前净值" else "--", linewidth=1.2)
+        ax.text(value, text_y, f"{label}\n{value:.3f}", ha="center", va="center", fontsize=8, color=color)
+
+    ax.grid(True, alpha=0.25, axis="x")
+    for spine in ("left", "right", "top"):
+        ax.spines[spine].set_visible(False)
+    fig.tight_layout()
+    return _chart_to_image(fig, width=15 * cm)
+
+
 # ── 主函数 ────────────────────────────────────────────────────────────────────
 
 def create_etf_pdf(data_file: str, output_path: str) -> None:
@@ -782,6 +852,8 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         "tracking_error": te.get("te", "N/A"),
         "tracking_bias": te.get("avg", "N/A"),
         "total_fee": total_fee,
+        "m_fee": m_fee,
+        "c_fee": c_fee,
         "aum": aum_bn,
         "aum_trend": aum_trend,
         "ma_position": ma_pos,
@@ -807,6 +879,11 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
 
     # AI 建议：作为配置模型之后的解释补充
     advice_text = get_investment_advice("etf", etf_summary)
+
+    # T1 借鉴股票报告：监控清单 / 赚钱机制 / 空方逻辑（规则化，零 token）
+    etf_monitor = build_etf_monitor(etf_summary)
+    etf_biz = build_etf_business_model(etf_summary)
+    etf_bear = build_etf_bear_case(etf_view, etf_summary)
 
     doc = SimpleDocTemplate(
         output_path, pagesize=A4,
@@ -997,6 +1074,22 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
             ])
         story.append(_tbl(mp_rows, col_widths=[3*cm, 4.5*cm, 8.5*cm]))
         story.append(Spacer(1, 0.2*cm))
+
+    # ── 2.6、情景参考区间图（T1：借鉴股票报告 §8）──
+    _cur_nav = _to_num(realtime_quote.get("iopv"))
+    if _cur_nav is None:
+        _cur_nav = _to_num(realtime_quote.get("price"))
+    band_img = _scenario_band_chart(
+        index_dailybasic_df, _to_num(etf_summary.get("index_pe")), _cur_nav, fund_name
+    )
+    if band_img is not None:
+        story.append(Paragraph("2.6、情景参考区间图", st["h2"]))
+        story.append(band_img)
+        story.append(Paragraph(
+            "图：基于跟踪指数 PE 历史分位（25/50/75）映射的净值情景区间，用于观察估值与风险状态，不代表任何交易判断。",
+            st["caption"]
+        ))
+        story.append(Spacer(1, 0.3*cm))
 
     # ── 三、业绩分析 ──
     story.append(Paragraph("三、业绩分析", st["h1"]))
@@ -1205,18 +1298,86 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         story.append(Spacer(1, 0.3*cm))
 
     # ── 八、风险提示 ──
-    story.append(Paragraph("八、风险提示", st["h1"]))
+    story.append(Paragraph("八、空方逻辑与风险推演", st["h1"]))
     intro = _chapter_intro_etf("风险提示")
     if intro:
         story.append(Paragraph(intro, st["caption"]))
-    risks = [
-        "本报告基于历史数据，不代表未来表现，市场有风险，投资需谨慎。",
-        "ETF 被动跟踪指数，指数下跌时基金净值同步下跌，无法规避系统性风险。",
-        "基金规模过小（低于2亿元）存在清盘风险，请关注规模变化。",
-        "本报告由 AI 辅助生成，仅供参考，不构成任何投资建议或承诺。",
-    ]
-    for r in risks:
-        story.append(Paragraph(f"• {r}", st["body"]))
+    story.append(Paragraph(
+        "对抗确认偏误：强制列出看空理由与黑天鹅场景。以下量化信号来自配置模型规则识别，"
+        "黑天鹅为基于指数特征与 ETF 机制的情景假设，不代表预测。",
+        st["caption"]
+    ))
+    story.append(Spacer(1, 0.2*cm))
+    story.append(Paragraph("看空理由（量化信号）", st["h2"]))
+    for b in etf_bear.get("bear", []):
+        story.append(Paragraph(f"• 【判断】{b}", st["body"]))
+    story.append(Spacer(1, 0.2*cm))
+    story.append(Paragraph("黑天鹅场景（需重点防范）", st["h2"]))
+    for s in etf_bear.get("swans", []):
+        story.append(Paragraph(f"• 【情景】{s}", st["body"]))
+    story.append(Paragraph(
+        "注：黑天鹅为基于行业特征与 ETF 机制的情景假设，不代表预测；用于提示需持续跟踪的脆弱点。",
+        st["caption"]
+    ))
+    story.append(Spacer(1, 0.3*cm))
+
+    # ── 九、未来验证节点（监控清单）（T1：借鉴股票报告 §18）──
+    story.append(Paragraph("九、未来验证节点（监控清单）", st["h1"]))
+    intro = _chapter_intro_etf("监控清单")
+    if intro:
+        story.append(Paragraph(intro, st["caption"]))
+    story.append(Paragraph(
+        "以下为规则化生成的跟踪框架：强化逻辑的事件与证伪逻辑的数据，用于持续验证研究结论。不构成买卖建议。",
+        st["caption"]
+    ))
+    story.append(Spacer(1, 0.2*cm))
+    story.append(Paragraph("强化逻辑的事件", st["h2"]))
+    for item in etf_monitor.get("strengthen", []):
+        story.append(Paragraph(f"• 【验证·强化】{item}", st["body"]))
+    story.append(Spacer(1, 0.2*cm))
+    story.append(Paragraph("证伪逻辑的数据", st["h2"]))
+    for item in etf_monitor.get("falsify", []):
+        story.append(Paragraph(f"• 【验证·证伪】{item}", st["body"]))
+    story.append(Spacer(1, 0.2*cm))
+    story.append(Paragraph("关键时间节点", st["h2"]))
+    for item in etf_monitor.get("milestones", []):
+        story.append(Paragraph(f"• {item}", st["body"]))
+    story.append(Spacer(1, 0.3*cm))
+
+    # ── 十、赚钱机制与商业模式拆解（T1：借鉴股票报告 §19）──
+    story.append(Paragraph("十、赚钱机制与商业模式拆解", st["h1"]))
+    intro = _chapter_intro_etf("赚钱机制")
+    if intro:
+        story.append(Paragraph(intro, st["caption"]))
+    story.append(Paragraph(
+        "本节从收益来源、成本侵蚀、跟踪误差与现金拖累拆解 ETF“靠什么赚钱”，区别于主动基金的选股超额。",
+        st["caption"]
+    ))
+    story.append(Spacer(1, 0.2*cm))
+    story.append(_tbl(etf_biz.get("rows", []), col_widths=[4*cm, 12*cm]))
+    story.append(Spacer(1, 0.2*cm))
+    story.append(Paragraph(etf_biz.get("narrative", ""), st["body"]))
+    story.append(Spacer(1, 0.3*cm))
+
+    # ── 十一、数据来源与取数说明（T1：借鉴股票报告 §22）──
+    story.append(Paragraph("十一、数据来源与取数说明", st["h1"]))
+    intro = _chapter_intro_etf("数据来源")
+    if intro:
+        story.append(Paragraph(intro, st["caption"]))
+    ds_rows = [["数据项", "来源 / 状态"]]
+    ds_rows.append(["基金规模、费率、成立日、实时行情", "通达信 MCP（tdx_quotes / tdx_indicator_select），零 token 落盘"])
+    ds_rows.append(["跟踪指数 PE 历史与分位", "通达信 MCP（tdx_api_data gzfx），727 行，零 token 落盘"])
+    ds_rows.append(["单日溢折率", "现价（tdx_quotes HQInfo.Now）对比 IOPV，零 token"])
+    ds_rows.append(["各期收益率", "通达信 MCP（tdx_kline，前复权 260 行），零 token"])
+    ds_rows.append(["成分股/行业权重、份额流变、NAV 历史分位、同类排名", "TDX 环境未提供源 → 标注「未获取」，未伪造"])
+    story.append(_tbl(ds_rows, col_widths=[6*cm, 10*cm]))
+    story.append(Spacer(1, 0.2*cm))
+    story.append(Paragraph(
+        "本报告遵循零 token 数据策略：优先使用通达信 MCP 实时/落盘数据，缺失项一律诚实标注「未获取」或「数据不足」，"
+        "不以模型生成内容充当事实。",
+        st["caption"]
+    ))
+    story.append(Spacer(1, 0.3*cm))
 
     doc.build(
         story,
