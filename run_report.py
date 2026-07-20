@@ -303,6 +303,20 @@ def build_etf(code, fin):
     if index_dailybasic is not None:
         data["index_dailybasic"] = index_dailybasic
 
+    # 宽基估值锚（T2a）：读 tdx_raw/broad_base_valuation.json（TDX 指数历史估值落盘，零 token）
+    bb_path = os.path.join(PROJECT_DIR, "tdx_raw", "broad_base_valuation.json")
+    if os.path.exists(bb_path):
+        with open(bb_path, encoding="utf-8") as f:
+            data["broad_base_valuation"] = json.load(f)
+        print("  宽基估值锚: 已加载 broad_base_valuation.json", flush=True)
+
+    # 同类 ETF 费率横向对比（T2b）：读 tdx_raw/peer_etf_fees.json（TDX 基金费率落盘，零 token）
+    pf_path = os.path.join(PROJECT_DIR, "tdx_raw", "peer_etf_fees.json")
+    if os.path.exists(pf_path):
+        with open(pf_path, encoding="utf-8") as f:
+            data["peer_etf_fees"] = json.load(f)
+        print("  同类ETF费率: 已加载 peer_etf_fees.json", flush=True)
+
     # 单日溢折率估算（收盘价 vs IOPV，均来自同一 TDX 快照；历史分位需 NAV 日度序列，此处留空）
     if q_price is not None and q_iopv:
         try:

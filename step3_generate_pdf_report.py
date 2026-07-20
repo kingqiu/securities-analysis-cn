@@ -135,6 +135,12 @@ def _load(json_file):
     if "premium_disc" in raw and isinstance(raw["premium_disc"], dict):
         d["premium_disc"] = raw["premium_disc"]
 
+    if "broad_base_valuation" in raw and isinstance(raw["broad_base_valuation"], dict):
+        d["broad_base_valuation"] = raw["broad_base_valuation"]
+
+    if "peer_etf_fees" in raw and isinstance(raw["peer_etf_fees"], dict):
+        d["peer_etf_fees"] = raw["peer_etf_fees"]
+
     if "free_market_data" in raw:
         d["free_market_data"] = raw["free_market_data"]
 
@@ -776,6 +782,72 @@ def _scenario_band_chart(index_dailybasic_df, current_pe, current_nav, fund_name
     return _chart_to_image(fig, width=15 * cm)
 
 
+def _valuation_anchor_chart(broad):
+    """宽基估值锚条形图（T2a）：各指数 PE 自身近3年历史分位。零 token。"""
+    indices = broad.get("indices") if isinstance(broad, dict) else None
+    if not indices:
+        return None
+    names, pcts, colors = [], [], []
+    for it in indices:
+        p = it.get("pe_pct")
+        if p is None:
+            continue
+        names.append(it["name"])
+        pcts.append(p)
+        if p <= 30:
+            colors.append("#1e8449")      # 偏低 → 绿
+        elif p <= 60:
+            colors.append("#b7950b")      # 适中 → 黄
+        else:
+            colors.append("#922b21")      # 偏高 → 红
+    if not names:
+        return None
+    fig, ax = plt.subplots(figsize=(10, 3.2))
+    bars = ax.bar(names, pcts, color=colors, alpha=0.85, width=0.5)
+    ax.set_ylim(0, 100)
+    ax.set_ylabel("PE 近3年分位 (%)")
+    ax.set_title("宽基指数 PE 历史分位对比（越高 = 相对自身历史越贵）", fontsize=12)
+    for b, p in zip(bars, pcts):
+        ax.text(b.get_x() + b.get_width() / 2, p + 1.5, f"{p:.1f}%",
+                ha="center", va="bottom", fontsize=9)
+    ax.axhline(50, color="#888888", linestyle="--", linewidth=0.8)
+    ax.grid(True, alpha=0.3, axis="y")
+    fig.tight_layout()
+    return _chart_to_image(fig, width=15 * cm)
+
+
+def _peer_fee_chart(peer):
+    """同类 ETF 综合费率横向对比条形图（T2b）。零 token。"""
+    peers = peer.get("peers") if isinstance(peer, dict) else None
+    if not peers:
+        return None
+    rows = []
+    for it in peers:
+        tf = it.get("total_fee")
+        if tf is None:
+            continue
+        rows.append((f'{it["name"]}\n{it["code"]}', float(tf), bool(it.get("is_self"))))
+    if not rows:
+        return None
+    rows.sort(key=lambda x: x[1])
+    labels = [r[0] for r in rows]
+    vals = [r[1] for r in rows]
+    colors = ["#1f4e79" if r[2] else "#aab7c4" for r in rows]
+    fig, ax = plt.subplots(figsize=(10, 3.4))
+    bars = ax.barh(labels, vals, color=colors, alpha=0.9)
+    ax.set_xlim(0, max(vals) * 1.18)
+    ax.set_xlabel("综合费率 (%/年)")
+    ax.set_title("同类科创50 ETF 综合费率对比（蓝 = 本报告标的 588000）", fontsize=12)
+    for b, v in zip(bars, vals):
+        ax.text(v + 0.008, b.get_y() + b.get_height() / 2, f"{v:.2f}%",
+                va="center", ha="left", fontsize=9)
+    ax.grid(True, alpha=0.3, axis="x")
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    fig.tight_layout()
+    return _chart_to_image(fig, width=15 * cm)
+
+
 # ── 主函数 ────────────────────────────────────────────────────────────────────
 
 def create_etf_pdf(data_file: str, output_path: str) -> None:
@@ -871,6 +943,8 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         "industry_weight_status": concentration.get("industry_weight_status", "缺少行业映射"),
         "current_price": realtime_quote.get("price", "N/A"),
         "change_pct": realtime_quote.get("change_pct", "N/A"),
+        "broad_base": d.get("broad_base_valuation"),
+        "peer_fees": d.get("peer_etf_fees"),
         "turnover_rate": realtime_quote.get("turnover_rate", "N/A"),
         "amount": realtime_quote.get("amount", "N/A"),
     }
@@ -1091,6 +1165,39 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
         ))
         story.append(Spacer(1, 0.3*cm))
 
+    # ── 2.7、宽基估值锚：科创50 相对大盘贵不贵（T2a）──
+    broad = etf_summary.get("broad_base")
+    if broad and broad.get("indices"):
+        story.append(Paragraph("2.7、宽基估值锚：科创50 相对大盘贵不贵", st["h2"]))
+        story.append(Paragraph(
+            "这节回答：把科创50 放进沪深300 / 中证500 / 创业板指这几个宽基指数里，它的估值处在什么位置？"
+            "绝对 PE 看\"水平贵不贵\"，自身历史分位看\"相对自己过去贵不贵\"，两者要结合看。",
+            st["caption"]
+        ))
+        bb_rows = [["指数", "代码", "当前PE(TTM)", "自身3Y分位", "PB(MRQ)", "股息率"]]
+        for it in broad["indices"]:
+            pe_s = f'{it["pe"]:.2f}' if it.get("pe") is not None else "N/A"
+            pct_s = f'{it["pe_pct"]:.1f}%' if it.get("pe_pct") is not None else "N/A"
+            pb_s = f'{it["pb"]:.2f}' if it.get("pb") is not None else "—"
+            div_s = f'{it["div_yield"]:.2f}%' if it.get("div_yield") is not None else "—"
+            bb_rows.append([it["name"], it["code"], pe_s, pct_s, pb_s, div_s])
+        story.append(_tbl(bb_rows, col_widths=[3.2*cm, 2.0*cm, 3.0*cm, 2.6*cm, 2.4*cm, 2.0*cm]))
+        story.append(Paragraph(
+            "注：科创50 采用代表性/中位数 PE（整体 PE 因成分股亏损失真，TDX 加权口径约 210x）；"
+            "宽基指数为整体 PE(TTM) 口径，两者口径不同，仅作定性参考。各指数分位为自身近3年历史内相对位置。",
+            st["caption"]
+        ))
+        anchor_img = _valuation_anchor_chart(broad)
+        if anchor_img is not None:
+            story.append(Spacer(1, 0.2*cm))
+            story.append(anchor_img)
+            story.append(Paragraph(
+                "图：各宽基指数 PE 自身近3年历史分位。可见 2025–2026 反弹后，沪深300/中证500/创业板指已处自身历史偏高区，"
+                "而科创50 仍处中枢附近（约 50% 分位）——绝对 PE 更高，但相对自身历史并不算贵。",
+                st["caption"]
+            ))
+        story.append(Spacer(1, 0.3*cm))
+
     # ── 三、业绩分析 ──
     story.append(Paragraph("三、业绩分析", st["h1"]))
     intro = _chapter_intro_etf("业绩分析")
@@ -1267,6 +1374,50 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     story.append(_tbl(fee_rows, col_widths=[6*cm, 6*cm]))
     story.append(Spacer(1, 0.3*cm))
 
+    # ── 7.1、同类 ETF 费率横向对比（T2b）──
+    peer_fees = etf_summary.get("peer_fees")
+    if peer_fees and peer_fees.get("peers"):
+        story.append(Paragraph("7.1、同类 ETF 费率横向对比", st["h2"]))
+        story.append(Paragraph(
+            "这节回答：和同赛道（跟踪上证科创板50成份指数）的其他 ETF 比，本基金的持有成本处在什么水平？"
+            "ETF 是被动产品，长期收益主要来自指数 β，费率越低、每年复利侵蚀越少，对长期持有的影响越明显。",
+            st["caption"]
+        ))
+        peers_sorted = sorted(peer_fees["peers"], key=lambda x: (x.get("total_fee") or 999))
+        pf_rows = [["基金", "代码", "管理公司", "管理费 %/年", "托管费 %/年", "综合费率 %/年"]]
+        for it in peers_sorted:
+            tag = "（本报告标的）" if it.get("is_self") else ""
+            pf_rows.append([
+                it["name"] + tag,
+                it["code"],
+                it.get("management", "—"),
+                f'{it["m_fee"]:.2f}' if it.get("m_fee") is not None else "—",
+                f'{it["c_fee"]:.2f}' if it.get("c_fee") is not None else "—",
+                f'{it["total_fee"]:.2f}' if it.get("total_fee") is not None else "—",
+            ])
+        story.append(_tbl(pf_rows, col_widths=[3.0*cm, 2.0*cm, 3.2*cm, 2.6*cm, 2.6*cm, 3.0*cm]))
+        # 洞察：找最低/最高，给本报告标的定性
+        fees = [p["total_fee"] for p in peers_sorted if p.get("total_fee") is not None]
+        self_fee = next((p["total_fee"] for p in peers_sorted if p.get("is_self")), None)
+        min_fee, max_fee = (min(fees), max(fees)) if fees else (None, None)
+        if self_fee is not None and min_fee is not None and max_fee is not None:
+            cheaper = sum(1 for f in fees if f < self_fee)
+            if cheaper == 0:
+                rank_txt = "并列同类最低（无同类更便宜）"
+            else:
+                rank_txt = f"同类第 {cheaper + 1} 低（仅 {cheaper} 只更便宜）"
+            story.append(Paragraph(
+                f"注：本基金（588000）综合费率 {self_fee:.2f}%/年，同类最低为 {min_fee:.2f}%/年、最高为 {max_fee:.2f}%/年；"
+                f"本基金{rank_txt}。"
+                "费率差异按年复利长期累积：以 0.60% 与 0.20% 计，持有 10 年成本相差约 4.4 个百分点。",
+                st["caption"]
+            ))
+        fee_img = _peer_fee_chart(peer_fees)
+        if fee_img is not None:
+            story.append(Spacer(1, 0.2*cm))
+            story.append(fee_img)
+        story.append(Spacer(1, 0.3*cm))
+
     # ── 七点五、指数估值与溢价折价 ──
     if index_val:
         story.append(Paragraph("7.5 跟踪指数估值位置", st["h2"]))
@@ -1367,6 +1518,8 @@ def create_etf_pdf(data_file: str, output_path: str) -> None:
     ds_rows = [["数据项", "来源 / 状态"]]
     ds_rows.append(["基金规模、费率、成立日、实时行情", "通达信 MCP（tdx_quotes / tdx_indicator_select），零 token 落盘"])
     ds_rows.append(["跟踪指数 PE 历史与分位", "通达信 MCP（tdx_api_data gzfx），727 行，零 token 落盘"])
+    ds_rows.append(["宽基估值锚（沪深300/中证500/创业板指 PE·PB·股息率·分位）", "通达信 MCP（tdx_security_deep_info 指数历史估值），各 37 个月度点，零 token 落盘"])
+    ds_rows.append(["同类 ETF 费率（588080/588050/588090/588180/588280 管理费+托管费+综合费率）", "通达信 MCP（tdx_security_deep_info 基金购买信息/基本资料），零 token 落盘"])
     ds_rows.append(["单日溢折率", "现价（tdx_quotes HQInfo.Now）对比 IOPV，零 token"])
     ds_rows.append(["各期收益率", "通达信 MCP（tdx_kline，前复权 260 行），零 token"])
     ds_rows.append(["成分股/行业权重、份额流变、NAV 历史分位、同类排名", "TDX 环境未提供源 → 标注「未获取」，未伪造"])

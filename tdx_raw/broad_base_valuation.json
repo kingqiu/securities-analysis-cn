@@ -1,0 +1,52 @@
+{
+  "source": "TDX tdx_security_deep_info f9_index_historical_pe_pb（指数历史估值）, 近3年月末快照 2023-07-31~2026-07-17",
+  "fetched_at": "2026-07-19T14:30:00+08:00",
+  "note": "科创50 采用代表性/中位数 PE（整体口径失真）；沪深300/中证500/创业板指 为整体 PE(TTM) 口径。两者口径不同，仅作定性参考。各指数 PE 分位为自身近3年历史（科创50 日度727点 / 宽基 月度37点）内相对位置。",
+  "indices": [
+    {
+      "code": "000688",
+      "name": "科创50",
+      "pe": 25.48,
+      "pe_pct": 50.9,
+      "pb": null,
+      "div_yield": null,
+      "pe_metric": "代表性PE(中位)",
+      "pe_min": null,
+      "pe_max": null,
+      "note": "整体PE(TTM)因成分股亏损失真（TDX加权约210x/剔除负值约102x），本报告沿用市场通用的代表性/中位数PE≈25.5x（与全文一致），其分位基于该日度序列。"
+    },
+    {
+      "code": "000300",
+      "name": "沪深300",
+      "pe": 13.99,
+      "pe_pct": 73.0,
+      "pb": 1.3,
+      "div_yield": 2.96,
+      "pe_metric": "整体PE(TTM)",
+      "pe_min": 10.72,
+      "pe_max": 14.69
+    },
+    {
+      "code": "000905",
+      "name": "中证500",
+      "pe": 35.53,
+      "pe_pct": 83.8,
+      "pb": 2.27,
+      "div_yield": 1.38,
+      "pe_metric": "整体PE(TTM)",
+      "pe_min": 19.19,
+      "pe_max": 42.02
+    },
+    {
+      "code": "399006",
+      "name": "创业板指",
+      "pe": 43.76,
+      "pe_pct": 86.5,
+      "pb": 5.86,
+      "div_yield": 0.92,
+      "pe_metric": "整体PE(TTM)",
+      "pe_min": 23.22,
+      "pe_max": 54.65
+    }
+  ]
+}

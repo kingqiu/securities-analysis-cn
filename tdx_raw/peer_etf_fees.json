@@ -1,0 +1,13 @@
+{
+  "source": "TDX tdx_security_deep_info f9_fund_overview_purchase_info(info_type=003) + f9_fund_diagnosis_basic_info(query_type=jbxx)，2026-07-20 落盘，零 token",
+  "fetched_at": "2026-07-20T09:45:00+08:00",
+  "note": "同类 = 跟踪上证科创板50成份指数(000688) 的 ETF；费率单位 %/年；综合费率 = 管理费 + 托管费。588000 为本报告标的（取自 fin_588000.json / TDX 同源），其余为同类竞品。",
+  "peers": [
+    {"code": "588000", "name": "科创50ETF", "management": "华夏基金", "m_fee": 0.15, "c_fee": 0.05, "total_fee": 0.20, "is_self": true},
+    {"code": "588080", "name": "科创板50", "management": "易方达基金", "m_fee": 0.15, "c_fee": 0.05, "total_fee": 0.20, "is_self": false},
+    {"code": "588050", "name": "科创ETF", "management": "工银瑞信基金", "m_fee": 0.30, "c_fee": 0.05, "total_fee": 0.35, "is_self": false},
+    {"code": "588090", "name": "科创板", "management": "华泰柏瑞基金", "m_fee": 0.50, "c_fee": 0.10, "total_fee": 0.60, "is_self": false},
+    {"code": "588180", "name": "科创50基", "management": "国联安基金", "m_fee": 0.30, "c_fee": 0.05, "total_fee": 0.35, "is_self": false},
+    {"code": "588280", "name": "科创五零", "management": "华安基金", "m_fee": 0.15, "c_fee": 0.05, "total_fee": 0.20, "is_self": false}
+  ]
+}
