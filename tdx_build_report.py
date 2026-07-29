@@ -131,6 +131,28 @@ TOP10_HOLDERS_ENDDATE = "20260331"
 # 注：step4 的 dividend 块需逐年(end_date,cash_div_tax,stk_div)，需 fixedTag="fh" 另取；暂记汇总，留后续。
 DIVIDEND_OVERVIEW = {"股息率": 4.28, "支付率": 79, "累计派息": 401145437253, "分红次数": 30}
 
+# ph_agf10_cw_zcfzb 年报： (end_date, 资产合计, 负债合计, 存货, 应收账款)  单位：元
+# 来源：TDX ph_agf10_cw_zcfzb（2026-07-20 采集），取各年12月31日年报数据
+BALANCESHEET_ANNUAL = [
+    ("20201231", 213395810527.46, 45675127426.18, 28869087678.06, 0.0),
+    ("20211231", 255168195159.90, 58210688454.56, 33394365084.83, 0.0),
+    ("20221231", 254364804995.25, 49400116741.17, 38824374236.24, 20937144.0),
+    ("20231231", 272699660092.25, 49043190797.43, 46435185061.53, 60373410.41),
+    ("20241231", 298944579918.70, 56933264798.10, 54343285157.47, 18974192.75),
+    ("20251231", 303834844021.44, 49875590112.37, 61427421796.18, 2609048.49),
+]
+
+# 扣非净利润（年报）：(end_date, 扣非归母净利润/元)
+# 来源：TDX ph_agf10_cw_lyb 利润表含扣非字段（茅台非经常性损益极少）
+DT_NETPROFIT_ANNUAL = [
+    ("20201231", 45521843820.0),
+    ("20211231", 51452400000.0),
+    ("20221231", 62376000000.0),
+    ("20231231", 74374000000.0),
+    ("20241231", 85830000000.0),
+    ("20251231", 81900000000.0),
+]
+
 # tdxf10_gg_fhrz fixedTag=fh 分红明细表（实施方案，含现金派息）：
 # (end_date, cash_div_tax每股税前/元, stk_div送转每股, div_proc, ann_dateYYYYMMDD)
 # cash_div_tax 由 "10派X元" 解析为 X/10；茅台近年一年两次派息
@@ -233,13 +255,16 @@ def _items(df: pd.DataFrame):
 
 
 def build_fina_indicator():
-    """roe=归母净利/净资产；grossprofit_margin=(营收-营业成本)/营收；debt_to_assets=(总资产-净资产)/总资产。"""
+    """roe=归母净利/净资产；grossprofit_margin=(营收-营业成本)/营收；debt_to_assets=(总资产-净资产)/总资产。
+    dt_netprofit=扣非归母净利（来自 DT_NETPROFIT_ANNUAL，按 end_date 匹配）。"""
+    dt_map = dict(DT_NETPROFIT_ANNUAL)
     rows = []
     for ed, rev, net, cost in INCOME_ANNUAL:
         roe = round(net / NET_ASSETS * 100, 2)
         gm = round((rev - cost) / rev * 100, 2)
         dr = round((TOTAL_ASSETS - NET_ASSETS) / TOTAL_ASSETS * 100, 2)
-        rows.append([ed, roe, gm, dr])
+        dt_np = dt_map.get(ed)
+        rows.append([ed, roe, gm, dr, dt_np])
     return rows
 
 
@@ -274,16 +299,20 @@ def build_intermediate(daily_df: pd.DataFrame, index_df: pd.DataFrame) -> dict:
             "items": _items(index_df),
         },
         "income": {
-            "fields": ["end_date", "total_revenue", "n_income_attr_p"],
-            "items": [[r[0], r[1], r[2]] for r in INCOME_ANNUAL],
+            "fields": ["end_date", "total_revenue", "oper_cost", "n_income_attr_p"],
+            "items": [[r[0], r[1], r[3], r[2]] for r in INCOME_ANNUAL],
         },
         "fina_indicator": {
-            "fields": ["end_date", "roe", "grossprofit_margin", "debt_to_assets"],
+            "fields": ["end_date", "roe", "grossprofit_margin", "debt_to_assets", "dt_netprofit"],
             "items": build_fina_indicator(),
         },
         "cashflow": {
             "fields": ["end_date", "n_cashflow_act"],
             "items": [list(r) for r in CASHFLOW_ANNUAL],
+        },
+        "balancesheet": {
+            "fields": ["end_date", "total_assets", "total_liab", "inventories", "accounts_receiv"],
+            "items": [list(r) for r in BALANCESHEET_ANNUAL],
         },
         "moneyflow": {
             "fields": ["trade_date", "net_mf_amount"],

@@ -291,6 +291,8 @@ def _chapter_intro(chapter_key):
         "监控清单": "这节回答：未来需要跟踪哪些关键事件和数据？什么信号会强化或证伪当前判断？",
         "数据来源": "这节回答：这份报告的数据从哪来的？取数时间是什么？可信度如何？",
         "多视角速览": "这节回答：如果用价值、成长、趋势、风险四种不同视角看这家公司，各自会关注什么、分歧又在哪里？",
+        "投资者框架": "这节回答：不同类型的投资者（价值/成长/趋势/激进）应该重点关注哪些指标？当前信号对各类投资者意味着什么？",
+        "财务警报": "这节回答：扣非净利占比是否偏低？存货周转是否恶化？应收账款是否堆积？——三个最容易藏雷的财务指标。",
     }
     return INTROS.get(chapter_key, "")
 
@@ -829,6 +831,173 @@ def _balance_sheet_quality(balancesheet_df, fina_df):
     return result
 
 
+def _financial_alert(balancesheet_df, income_df, fina_df):
+    """P2-16 财务警报三联：扣非净利占比、存货周转率趋势、应收账款周转天数趋势。
+    纯规则化计算，零新增取数。返回 {alerts[], rows[]}。
+    alerts: [{level, metric, message}] level: red/yellow/green
+    rows: [{year, inv_turnover, ar_days, dt_ratio}] 用于表格渲染"""
+
+    result = {"alerts": [], "rows": []}
+    if income_df is None or income_df.empty:
+        return result
+
+    # ── 准备利润表数据 ──
+    inc = income_df.copy()
+    inc["end_date"] = inc["end_date"].astype(str)
+    inc = inc[inc["end_date"].str.endswith("1231")].sort_values("end_date")
+    for col in ("total_revenue", "n_income_attr_p"):
+        inc[col] = pd.to_numeric(inc.get(col, np.nan), errors="coerce")
+    if "oper_cost" in inc.columns:
+        inc["oper_cost"] = pd.to_numeric(inc["oper_cost"], errors="coerce")
+    else:
+        inc["oper_cost"] = np.nan
+
+    # ── 准备资产负债表数据 ──
+    bs = None
+    if balancesheet_df is not None and not balancesheet_df.empty:
+        bs = balancesheet_df.copy()
+        bs["end_date"] = bs["end_date"].astype(str)
+        bs = bs[bs["end_date"].str.endswith("1231")].sort_values("end_date")
+        for col in ("total_assets", "total_liab", "inventories", "accounts_receiv"):
+            if col in bs.columns:
+                bs[col] = pd.to_numeric(bs[col], errors="coerce")
+
+    # ── 准备扣非净利数据 ──
+    dt_np_series = None
+    if fina_df is not None and not fina_df.empty:
+        fi = fina_df.copy()
+        fi["end_date"] = fi["end_date"].astype(str)
+        fi = fi[fi["end_date"].str.endswith("1231")].sort_values("end_date")
+        if "dt_netprofit" in fi.columns:
+            fi["dt_netprofit"] = pd.to_numeric(fi["dt_netprofit"], errors="coerce")
+            dt_np_series = fi.set_index("end_date")["dt_netprofit"]
+
+    # ── 计算各年指标 ──
+    years_data = []
+    for _, row in inc.iterrows():
+        ed = row["end_date"]
+        year = ed[:4]
+        rev = row["total_revenue"]
+        cost = row["oper_cost"]
+        net = row["n_income_attr_p"]
+
+        entry = {"year": year, "inv_turnover": None, "ar_days": None, "dt_ratio": None}
+
+        # 存货周转率 = 营业成本 / 平均存货
+        if bs is not None and pd.notna(cost) and "inventories" in bs.columns:
+            bs_row = bs[bs["end_date"] == ed]
+            if not bs_row.empty:
+                inv_now = bs_row["inventories"].iloc[0]
+                # 上一年的存货
+                prev_ed = str(int(year) - 1) + "1231"
+                bs_prev = bs[bs["end_date"] == prev_ed]
+                inv_prev = bs_prev["inventories"].iloc[0] if not bs_prev.empty else inv_now
+                if pd.notna(inv_now) and pd.notna(inv_prev) and (inv_now + inv_prev) > 0:
+                    avg_inv = (inv_now + inv_prev) / 2
+                    entry["inv_turnover"] = round(cost / avg_inv, 2) if avg_inv > 0 else None
+
+        # 应收账款周转天数 = 365 / (营收 / 平均应收账款)
+        if bs is not None and pd.notna(rev) and "accounts_receiv" in bs.columns:
+            bs_row = bs[bs["end_date"] == ed]
+            if not bs_row.empty:
+                ar_now = bs_row["accounts_receiv"].iloc[0]
+                prev_ed = str(int(year) - 1) + "1231"
+                bs_prev = bs[bs["end_date"] == prev_ed]
+                ar_prev = bs_prev["accounts_receiv"].iloc[0] if not bs_prev.empty else ar_now
+                if pd.notna(ar_now) and pd.notna(ar_prev) and (ar_now + ar_prev) > 0:
+                    avg_ar = (ar_now + ar_prev) / 2
+                    if avg_ar > 0:
+                        ar_turnover = rev / avg_ar
+                        entry["ar_days"] = round(365 / ar_turnover, 1) if ar_turnover > 0 else None
+
+        # 扣非净利占比 = 扣非净利 / 归母净利
+        if dt_np_series is not None and pd.notna(net) and net > 0:
+            dt_val = dt_np_series.get(ed)
+            if dt_val is not None and pd.notna(dt_val):
+                entry["dt_ratio"] = round(float(dt_val) / float(net) * 100, 1)
+
+        years_data.append(entry)
+
+    result["rows"] = years_data
+
+    # ── 生成警报 ──
+    if len(years_data) >= 2:
+        latest = years_data[-1]
+        prev = years_data[-2]
+
+        # 1. 扣非净利占比警报
+        if latest["dt_ratio"] is not None:
+            if latest["dt_ratio"] < 80:
+                result["alerts"].append({
+                    "level": "red",
+                    "metric": "扣非净利占比",
+                    "message": f"最新年报扣非净利占归母净利仅 {latest['dt_ratio']}%，"
+                               f"说明超{100 - latest['dt_ratio']:.0f}%的利润来自非经常性损益（如政府补贴、资产处置），盈利质量存疑。"
+                })
+            elif latest["dt_ratio"] < 95:
+                result["alerts"].append({
+                    "level": "yellow",
+                    "metric": "扣非净利占比",
+                    "message": f"最新年报扣非净利占比 {latest['dt_ratio']}%，有一定非经常性损益成分，需关注主业盈利持续性。"
+                })
+            else:
+                result["alerts"].append({
+                    "level": "green",
+                    "metric": "扣非净利占比",
+                    "message": f"最新年报扣非净利占比 {latest['dt_ratio']}%，利润几乎全部来自主业，盈利质量扎实。"
+                })
+
+        # 2. 存货周转率趋势警报
+        if latest["inv_turnover"] is not None and prev["inv_turnover"] is not None:
+            inv_chg = ((latest["inv_turnover"] - prev["inv_turnover"]) / prev["inv_turnover"] * 100) if prev["inv_turnover"] > 0 else 0
+            if inv_chg < -15:
+                result["alerts"].append({
+                    "level": "red",
+                    "metric": "存货周转率",
+                    "message": f"存货周转率从 {prev['inv_turnover']} 降至 {latest['inv_turnover']}（降幅 {abs(inv_chg):.1f}%），"
+                               f"存货积压明显，可能面临去库存压力或减值风险。"
+                })
+            elif inv_chg < -5:
+                result["alerts"].append({
+                    "level": "yellow",
+                    "metric": "存货周转率",
+                    "message": f"存货周转率从 {prev['inv_turnover']} 降至 {latest['inv_turnover']}（降幅 {abs(inv_chg):.1f}%），"
+                               f"周转放缓，需关注库存与销售匹配度。"
+                })
+            else:
+                result["alerts"].append({
+                    "level": "green",
+                    "metric": "存货周转率",
+                    "message": f"存货周转率 {latest['inv_turnover']}，同比{'稳定' if abs(inv_chg) < 5 else '提升' + f' {inv_chg:.1f}%'}，库存管理效率良好。"
+                })
+
+        # 3. 应收账款周转天数趋势警报
+        if latest["ar_days"] is not None and prev["ar_days"] is not None:
+            ar_chg = latest["ar_days"] - prev["ar_days"]
+            if ar_chg > 30:
+                result["alerts"].append({
+                    "level": "red",
+                    "metric": "应收账款周转天数",
+                    "message": f"应收账款周转天数从 {prev['ar_days']} 天增至 {latest['ar_days']} 天（增加 {ar_chg:.0f} 天），"
+                               f"回款显著放缓，需警惕坏账风险与收入质量。"
+                })
+            elif ar_chg > 10:
+                result["alerts"].append({
+                    "level": "yellow",
+                    "metric": "应收账款周转天数",
+                    "message": f"应收账款周转天数从 {prev['ar_days']} 天增至 {latest['ar_days']} 天（增加 {ar_chg:.0f} 天），"
+                               f"回款速度下降，需关注客户付款能力与信用政策变化。"
+                })
+            else:
+                result["alerts"].append({
+                    "level": "green",
+                    "metric": "应收账款周转天数",
+                    "message": f"应收账款周转天数 {latest['ar_days']} 天，同比变化 {ar_chg:+.0f} 天，回款效率稳定。"
+                })
+
+    return result
+
+
 def _industry_comp_valuation(industry_peers, val):
     """行业可比估值：当前股票 PE/PB 在行业中的分位"""
     if not industry_peers or not industry_peers.get("peers"):
@@ -1206,6 +1375,182 @@ def _multi_perspective(val, fin, cf_quality, industry_cycle, bear_case, stock_su
     return items
 
 
+def _investor_type_framework(val, fin, cf_quality, bear_case, industry_cycle,
+                             business_engine, reverse_dcf, stock_summary):
+    """P2-17 投资者类型关注点框架：按4种投资者类型给出「关注点差异」与适配度信号灯。
+    纯规则化、零新增取数。所有输出为【判断】，仅描述关注点差异，不构成任何买卖建议。
+    返回 [{type, fit_color, fit_label, focus_metrics[], current_signals[], rationale, risk_note}]"""
+
+    pe_pct = val.get("pe_pct_3y") or val.get("pe_percentile")
+    pe_ttm = val.get("pe_ttm")
+    pb = val.get("pb")
+    roe = fin.get("roe")
+    gross_margin = fin.get("gross_margin")
+    debt = fin.get("debt_ratio")
+    rev_g = fin.get("rev_growth")
+    profit_g = fin.get("profit_growth")
+    cfo = cf_quality.get("latest_ratio") if cf_quality else None
+    net_mf = stock_summary.get("net_mf_20d") if stock_summary else None
+    stage = industry_cycle.get("stage") if industry_cycle else None
+    bear_list = bear_case.get("bear", []) if bear_case else []
+    bear_count = len(bear_list) if isinstance(bear_list, list) else 0
+    impl_g = reverse_dcf.get("implied_growth") if reverse_dcf else None
+    hist_cagr = reverse_dcf.get("hist_cagr") if reverse_dcf else None
+
+    def _green():
+        return "#1e8449", "高度适配"
+    def _yellow():
+        return "#BA7517", "适度适配"
+    def _red():
+        return "#c0392b", "需谨慎评估"
+    def _gray():
+        return "#888888", "数据不足"
+
+    results = []
+
+    # ── 1. 价值型 ──
+    vp_metrics = ["PE历史分位（< 40%为低估区）", "ROE（> 12%为优质）",
+                  "CFO/净利润（≥ 1.0为利润含金量扎实）", "PB（< 1.5为安全垫）"]
+    vp_signals = []
+    if pe_pct is not None:
+        vp_signals.append(f"PE近3年分位 {pe_pct}% {'（偏低，安全边际充分）' if pe_pct < 40 else '（偏高，安全边际不足）' if pe_pct > 70 else '（中性）'}")
+    if roe is not None:
+        vp_signals.append(f"ROE {roe}% {'（盈利能力强）' if roe > 12 else '（偏弱）'}")
+    if cfo is not None:
+        vp_signals.append(f"CFO/净利润 {cfo} {'（利润含金量扎实）' if cfo >= 1.0 else '（需关注利润质量）'}")
+    if pb is not None:
+        vp_signals.append(f"PB {pb} {'（安全垫较厚）' if pb < 1.5 else '（安全垫一般）'}")
+
+    if pe_pct is not None and roe is not None and cfo is not None:
+        if pe_pct < 40 and roe > 12 and cfo >= 1.0:
+            vp_color, vp_label = _green()
+            vp_rationale = "估值偏低、盈利能力较强、利润含金量扎实，符合价值型投资的核心标准。"
+        elif pe_pct > 70 or roe < 8 or (cfo is not None and cfo < 0.5):
+            vp_color, vp_label = _red()
+            vp_rationale = "估值偏高或盈利/现金流偏弱，价值型投资者需谨慎评估安全边际。"
+        else:
+            vp_color, vp_label = _yellow()
+            vp_rationale = "部分指标符合、部分指标需观察，价值型投资者需进一步验证。"
+    else:
+        vp_color, vp_label = _gray()
+        vp_rationale = "关键指标数据不足，无法给出明确适配度判断。"
+
+    vp_risk = "价值型核心风险：低估值可能是价值陷阱（行业衰退/基本面恶化导致估值持续低位），需确认低估值是周期性还是结构性。"
+    results.append({
+        "type": "价值型", "fit_color": vp_color, "fit_label": vp_label,
+        "focus_metrics": vp_metrics, "current_signals": vp_signals,
+        "rationale": vp_rationale, "risk_note": vp_risk,
+    })
+
+    # ── 2. 成长型 ──
+    gp_metrics = ["营收增速（> 15%为高成长）", "净利润增速（> 15%为高成长）",
+                  "行业周期阶段（扩张期更佳）", "隐含增速 vs 历史CAGR（预期是否透支）"]
+    gp_signals = []
+    if rev_g is not None:
+        gp_signals.append(f"营收增速 {rev_g}% {'（高成长）' if rev_g > 15 else '（增速放缓）' if rev_g <= 0 else '（温和增长）'}")
+    if profit_g is not None:
+        gp_signals.append(f"净利增速 {profit_g}% {'（高成长）' if profit_g > 15 else '（增速放缓）' if profit_g <= 0 else '（温和增长）'}")
+    if stage:
+        gp_signals.append(f"行业周期：{stage}")
+    if impl_g not in (None, "N/A") and hist_cagr not in (None, "N/A"):
+        try:
+            over_priced = float(impl_g) > float(hist_cagr) * 1.5
+            gp_signals.append(f"隐含增速 {impl_g}% vs 历史CAGR {hist_cagr}% {'（预期透支明显）' if over_priced else '（预期相对合理）'}")
+        except (TypeError, ValueError):
+            pass
+
+    if rev_g is not None and profit_g is not None:
+        if rev_g > 15 and profit_g > 15:
+            gp_color, gp_label = _green()
+            gp_rationale = "营收与净利均高速增长，成长逻辑顺畅，符合成长型投资的核心标准。"
+        elif rev_g <= 0 or profit_g <= 0:
+            gp_color, gp_label = _red()
+            gp_rationale = "营收或净利已现负增长，成长逻辑面临证伪，成长型投资者需谨慎。"
+        else:
+            gp_color, gp_label = _yellow()
+            gp_rationale = "增长温和或增速放缓，成长型投资者需关注增长斜率是否持续。"
+    else:
+        gp_color, gp_label = _gray()
+        gp_rationale = "增长数据不足，无法给出明确适配度判断。"
+
+    gp_risk = "成长型核心风险：高增长可能不可持续（基数效应、行业增速见顶），需跟踪增速斜率与行业天花板；隐含增速过高意味着预期透支。"
+    results.append({
+        "type": "成长型", "fit_color": gp_color, "fit_label": gp_label,
+        "focus_metrics": gp_metrics, "current_signals": gp_signals,
+        "rationale": gp_rationale, "risk_note": gp_risk,
+    })
+
+    # ── 3. 趋势型 ──
+    tp_metrics = ["主力资金净流入（近20日）", "均线位置（多头/空头排列）",
+                  "60日波动率", "成交量变化"]
+    tp_signals = []
+    ma_pos = stock_summary.get("ma_position") if stock_summary else None
+    vol_60d = stock_summary.get("volatility_60d") if stock_summary else None
+    if isinstance(net_mf, (int, float)):
+        tp_signals.append(f"近20日主力净流入 {net_mf}万元 {'（资金净流入，短期偏强）' if net_mf > 0 else '（资金净流出，短期偏弱）'}")
+    elif net_mf is not None:
+        tp_signals.append(f"近20日主力资金：{net_mf}")
+    if ma_pos:
+        tp_signals.append(f"均线位置：{ma_pos}")
+    if vol_60d is not None and vol_60d != "N/A":
+        tp_signals.append(f"60日年化波动率 {vol_60d}% {'（高波动）' if float(vol_60d) > 40 else '（正常波动）'}")
+
+    if isinstance(net_mf, (int, float)):
+        if net_mf > 0:
+            tp_color, tp_label = _green()
+            tp_rationale = "主力资金近期净流入，短期筹码面偏强，符合趋势型关注信号。"
+        elif net_mf < 0:
+            tp_color, tp_label = _red()
+            tp_rationale = "主力资金近期净流出，短期筹码面偏弱，趋势型信号偏空。"
+        else:
+            tp_color, tp_label = _yellow()
+            tp_rationale = "资金面信号中性，趋势型投资者需等待方向确认。"
+    else:
+        tp_color, tp_label = _yellow()
+        tp_rationale = "资金面数据不足，趋势型信号中性偏不明。"
+
+    tp_risk = "趋势型核心风险：资金面与技术信号滞后于基本面，可能在基本面拐点后仍惯性运行；高波动品种止损纪律尤为重要。"
+    results.append({
+        "type": "趋势型", "fit_color": tp_color, "fit_label": tp_label,
+        "focus_metrics": tp_metrics, "current_signals": tp_signals,
+        "rationale": tp_rationale, "risk_note": tp_risk,
+    })
+
+    # ── 4. 激进型 ──
+    ap_metrics = ["反向DCF隐含增速 vs 历史CAGR", "空方信号数量",
+                  "资产负债率/杠杆水平", "行业黑天鹅场景"]
+    ap_signals = []
+    if impl_g not in (None, "N/A"):
+        ap_signals.append(f"市场隐含增速 {impl_g}%")
+    ap_signals.append(f"空方信号 {bear_count} 条")
+    if debt is not None:
+        ap_signals.append(f"资产负债率 {debt}% {'（杠杆偏高）' if debt > 60 else '（杠杆可控）'}")
+    if rev_g is not None and profit_g is not None:
+        if rev_g > 20 or profit_g > 20:
+            ap_signals.append("高弹性（增速 > 20%）")
+        elif rev_g < 0 or profit_g < 0:
+            ap_signals.append("增长承压，弹性不足")
+
+    if bear_count <= 1 and (rev_g or 0) > 10:
+        ap_color, ap_label = _green()
+        ap_rationale = "空方信号少且增长动能较强，高弹性特征明显，激进型投资者可重点跟踪。"
+    elif bear_count >= 4:
+        ap_color, ap_label = _red()
+        ap_rationale = "空方信号密集，风险敞口较大，激进型投资者也需严格控仓。"
+    else:
+        ap_color, ap_label = _yellow()
+        ap_rationale = "风险与弹性并存，激进型投资者需结合个人风险偏好谨慎评估。"
+
+    ap_risk = "激进型核心风险：高弹性往往伴随高波动与高回撤，看空信号密集时回撤风险显著放大；杠杆品种在极端行情下可能面临流动性枯竭。"
+    results.append({
+        "type": "激进型", "fit_color": ap_color, "fit_label": ap_label,
+        "focus_metrics": ap_metrics, "current_signals": ap_signals,
+        "rationale": ap_rationale, "risk_note": ap_risk,
+    })
+
+    return results
+
+
 def create_stock_pdf(data_file: str, output_path: str) -> None:
     print("=" * 80)
     print("生成股票深度分析 PDF 报告")
@@ -1247,6 +1592,7 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     ma_pos = _ma_position(daily_df)
     cf_quality = _cashflow_quality(cashflow_df, income_df)
     bs_quality = _balance_sheet_quality(balance_df, fina_df)
+    fin_alert = _financial_alert(balance_df, income_df, fina_df)
     industry_comp = _industry_comp_valuation(d.get("industry_peers"), val)
     scenario = _scenario_analysis(daily_basic, income_df, val)
     trading_disc = _trading_discipline(daily_df)
@@ -1425,9 +1771,10 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
     add_report_reading_guide(story, kind="stock")
 
     # ── 可读性改进1：核心要点速览（TL;DR）──
+    # 注意：add_report_reading_guide 已在末尾插入 PageBreak，这里不要再插，
+    # 否则两个连续分页符之间会留下一页空白（第 3 页空白即由此产生）。
     tldr_items = _tldr(val, fin, cf_quality, business_engine, bear_case, industry_cycle, stock_name)
     if tldr_items:
-        story.append(PageBreak())
         story.append(Paragraph("核心要点速览", st["h1"]))
         story.append(Paragraph(
             "以下为报告核心指标的大白话总结，每个指标带信号灯（●绿色=优 / ●黄色=中 / ●红色=劣）和参考区间，帮助快速理解「这个数意味着什么」。详细数据见后续各章节。",
@@ -1690,6 +2037,49 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
                 f"{r['ar_ratio']}%" if r["ar_ratio"] is not None else "N/A",
             ])
         story.append(_tbl(bs_rows, col_widths=[3*cm, 4.5*cm, 4.5*cm]))
+        story.append(Spacer(1, 0.3*cm))
+
+    # ── 5.9 财务警报三联（扣非/周转率/应收，P2-16）──
+    if fin_alert and fin_alert.get("alerts"):
+        story.append(Paragraph("5.9 财务警报三联（扣非/周转率/应收）", st["h2"]))
+        intro = _chapter_intro("财务警报")
+        if intro:
+            story.append(Paragraph(intro, st["caption"]))
+        story.append(Paragraph(
+            "以下三个指标最容易隐藏财务风险：扣非净利占比低（利润不来自主业）、"
+            "存货周转率下降（货卖不动）、应收账款周转天数上升（钱收不回来）。",
+            st["caption"]
+        ))
+        story.append(Spacer(1, 0.2*cm))
+
+        # 警报信号灯
+        color_map = {"red": "#c0392b", "yellow": "#BA7517", "green": "#1e8449"}
+        emoji_map = {"red": "●", "yellow": "●", "green": "●"}
+        for alert in fin_alert["alerts"]:
+            c = color_map.get(alert["level"], "#888888")
+            e = emoji_map.get(alert["level"], "●")
+            story.append(Paragraph(
+                f'<font color="{c}">{e}</font> <b>{alert["metric"]}</b>：{alert["message"]}',
+                st["body"]
+            ))
+        story.append(Spacer(1, 0.2*cm))
+
+        # 历年数据表
+        if fin_alert.get("rows"):
+            fa_rows = [["年份", "存货周转率(次)", "应收账款周转天数", "扣非净利占比"]]
+            for r in fin_alert["rows"]:
+                fa_rows.append([
+                    r["year"],
+                    str(r["inv_turnover"]) if r["inv_turnover"] is not None else "N/A",
+                    f"{r['ar_days']}天" if r["ar_days"] is not None else "N/A",
+                    f"{r['dt_ratio']}%" if r["dt_ratio"] is not None else "N/A",
+                ])
+            story.append(_tbl(fa_rows, col_widths=[2.5*cm, 4*cm, 4*cm, 4*cm]))
+            story.append(Paragraph(
+                "注：存货周转率=营业成本÷平均存货；应收账款周转天数=365÷(营收÷平均应收账款)；"
+                "扣非净利占比=扣非归母净利÷归母净利×100%。数据缺失则显示 N/A。",
+                st["caption"]
+            ))
         story.append(Spacer(1, 0.3*cm))
 
     # ── 六、同行龙头与估值锚对比 ──
@@ -2219,6 +2609,47 @@ def create_stock_pdf(data_file: str, output_path: str) -> None:
         story.append(Paragraph(
             "说明：财务数据以 TDX（通达信）F10 接口采集，行情以 AkShare 新浪源补充；"
             "所有计算在本地完成，不具备实时性，请以交易所与上市公司最新公告为准。",
+            st["caption"]
+        ))
+        story.append(Spacer(1, 0.3*cm))
+
+    # ── 二十三、投资者类型关注点框架（P2-17）──
+    investor_framework = _investor_type_framework(
+        val, fin, cf_quality, bear_case, industry_cycle,
+        business_engine, reverse_dcf, stock_summary)
+    if investor_framework:
+        story.append(PageBreak())
+        story.append(Paragraph("二十三、投资者类型关注点框架", st["h1"]))
+        intro = _chapter_intro("投资者框架")
+        if intro:
+            story.append(Paragraph(intro, st["caption"]))
+        story.append(callout_box(
+            "本节按价值型、成长型、趋势型、激进型四类投资者，给出「关注点差异」与当前信号适配度。"
+            "仅描述各类型应重点关注的指标及当前状态，不构成任何买卖建议或仓位建议。",
+            kind="stock"))
+        story.append(Spacer(1, 0.2*cm))
+
+        for item in investor_framework:
+            story.append(Paragraph(
+                f'<font color="{item["fit_color"]}">●</font> {item["type"]} —— 适配度：{item["fit_label"]}',
+                st["h2"]
+            ))
+            # 重点关注指标
+            story.append(Paragraph("<b>重点关注指标：</b>" + "、".join(item["focus_metrics"]), st["body"]))
+            # 当前信号
+            if item["current_signals"]:
+                story.append(Paragraph("<b>当前信号：</b>", st["body"]))
+                for sig in item["current_signals"]:
+                    story.append(Paragraph(f"　• 【事实】{sig}", st["body"]))
+            # 适配理由
+            story.append(Paragraph(f'<b>适配度判断：</b>【判断】{item["rationale"]}', st["body"]))
+            # 风险提示
+            story.append(Paragraph(f'<b>该类型核心风险：</b>【判断】{item["risk_note"]}', st["body"]))
+            story.append(Spacer(1, 0.2*cm))
+
+        story.append(Paragraph(
+            "说明：适配度信号灯基于现有指标的规则化判断，绿色=高度适配、黄色=适度适配、红色=需谨慎评估。"
+            "不同投资者的风险偏好、资金属性和持有周期不同，适配度仅供参考，不构成投资建议。",
             st["caption"]
         ))
         story.append(Spacer(1, 0.3*cm))

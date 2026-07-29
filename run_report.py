@@ -105,10 +105,19 @@ def build_stock(code, fin):
     db["total_mv"] = (db["close"] * shares).round(0)
     db = db[["trade_date", "pe_ttm", "pb", "total_mv", "close"]]
 
-    # fina_indicator（最新年报一期）
-    ed, rev, net, cost = income[-1]
-    fina_rows = [[ed, round(net/net_assets*100,2), round((rev-cost)/rev*100,2),
-                  round((total_assets-net_assets)/total_assets*100,2)]]
+    # fina_indicator（逐年，含扣非净利如有）—— 供 _financial_alert 历史行 + _balance_sheet_quality 取最新
+    _fina_fields = ["end_date", "roe", "grossprofit_margin", "debt_to_assets"]
+    _dt_map = {}
+    if "dt_netprofit_annual" in fin:
+        _dt_map = dict(fin["dt_netprofit_annual"])
+        _fina_fields.append("dt_netprofit")
+    _fina_rows = []
+    for ed, rev, net, cost in income:
+        row = [ed, round(net/net_assets*100, 2), round((rev-cost)/rev*100, 2),
+               round((total_assets-net_assets)/total_assets*100, 2)]
+        if _dt_map:
+            row.append(_dt_map.get(ed))
+        _fina_rows.append(row)
 
     # P0-3：杜邦分解（最新年报一期）
     _nm = net / rev if rev else 0               # 净利率
@@ -134,7 +143,7 @@ def build_stock(code, fin):
         "index_daily": {"fields": ["trade_date","close"], "items": _items(index)},
         "income": {"fields": ["end_date","total_revenue","oper_cost","n_income_attr_p"],
                    "items": [[r[0], r[1], r[3], r[2]] for r in income]},
-        "fina_indicator": {"fields": ["end_date","roe","grossprofit_margin","debt_to_assets"], "items": fina_rows},
+        "fina_indicator": {"fields": _fina_fields, "items": _fina_rows},
         "realtime_quote": {"price": price, "source": "tdx_quotes"},
         "dupont": dupont,
     }
@@ -151,6 +160,7 @@ def build_stock(code, fin):
     sources = [
         {"item": "行情/市值/PE·PB", "source": "AkShare 新浪日线 + TDX quotes", "time": fetch_time},
         {"item": "利润表(营收/成本/净利)", "source": "TDX ph_agf10_cw_lyb", "time": fetch_time},
+        {"item": "资产负债表(存货/应收/总资产)", "source": "TDX ph_agf10_cw_zcfzb", "time": fetch_time},
         {"item": "现金流量表", "source": "TDX ph_agf10_cw_xjllb", "time": fetch_time},
         {"item": "资金流向(主力净流入)", "source": "TDX tdxf10_gg_jyds", "time": fetch_time},
         {"item": "十大流通股东", "source": "TDX tdxf10_gg_gdyj", "time": fetch_time},
@@ -163,6 +173,9 @@ def build_stock(code, fin):
     data["data_sources"] = sources
     if "cashflow_annual" in fin:
         data["cashflow"] = {"fields": ["end_date","n_cashflow_act"], "items": [list(r) for r in fin["cashflow_annual"]]}
+    if "balancesheet_annual" in fin:
+        data["balancesheet"] = {"fields": ["end_date","total_assets","total_liab","inventories","accounts_receiv"],
+                                "items": [list(r) for r in fin["balancesheet_annual"]]}
     if "moneyflow_20d" in fin:
         data["moneyflow"] = {"fields": ["trade_date","net_mf_amount"], "items": [list(r) for r in fin["moneyflow_20d"]]}
     if "industry_peers" in fin:
